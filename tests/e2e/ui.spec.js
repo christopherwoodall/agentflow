@@ -19,6 +19,9 @@ test("validates, runs, retries, and reruns a DAG from the web UI", async ({ page
   await page.locator(".graph-node", { hasText: "plan" }).click();
   await expect(page.locator("#detail")).toContainText("Attempt 1");
   await expect(page.locator("#detail")).toContainText("Attempt 2");
+  await page.getByRole("button", { name: "Launch" }).click();
+  await expect(page.locator("#detail")).toContainText('"command": [');
+  await expect(page.locator("#detail")).toContainText("tests/e2e/bin/codex");
   await page.getByRole("button", { name: "Stdout" }).click();
   await expect(page.locator("#detail")).toContainText("plan success");
 

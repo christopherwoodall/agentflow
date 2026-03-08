@@ -12,6 +12,7 @@ AgentFlow is a Python orchestrator for `codex`, `claude`, and `kimi` agents with
 - Post-run success criteria including output contains text, file exists, file contains text, and file non-empty
 - Run queueing, retries, retry backoff, cancellation, rerun, and persisted run recovery
 - Web UI for DAG state, attempt history, JSONL trace parsing, stdout/stderr, and node artifacts
+- Redacted per-node `launch.json` artifacts for debugging shell bootstrap, container wrapping, and Lambda payloads
 - API endpoints for validation, launch, events, artifacts, cancel, rerun, and health checks
 
 ## Why this shape
@@ -205,10 +206,11 @@ The frontend shows:
 - current DAG state and node statuses
 - live run timeline and parsed JSONL trace events
 - per-node attempts and retry history
-- final outputs plus stdout, stderr, trace, and result artifacts
+- final outputs plus launch, stdout, stderr, trace, and result artifacts
 - controls to validate, launch, cancel, and rerun pipelines
 
 Artifact files are persisted under `AGENTFLOW_RUNS_DIR/<run_id>/artifacts/<node_id>/`.
+Each node now includes a redacted `launch.json` artifact that records the resolved command, working directory, selected runtime files, and any remote-runner payload metadata without storing secret env values or runtime file contents.
 
 ## API surface
 
