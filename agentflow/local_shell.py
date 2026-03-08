@@ -316,10 +316,21 @@ def target_uses_interactive_bash(target: Any) -> bool:
             continue
 
         interactive = False
-        for arg in shell_parts[index + 1 :]:
+        position = index + 1
+        while position < len(shell_parts):
+            arg = shell_parts[position]
+            if arg == "--":
+                return interactive
             if arg.startswith("--"):
                 if arg == "--command":
                     return interactive
+                if arg in _BASH_LONG_FLAGS_WITH_VALUE:
+                    position += 2
+                    continue
+                if any(arg.startswith(f"{option}=") for option in _BASH_LONG_FLAGS_WITH_VALUE):
+                    position += 1
+                    continue
+                position += 1
                 continue
             if not arg.startswith("-") or arg == "-":
                 return interactive
@@ -327,6 +338,7 @@ def target_uses_interactive_bash(target: Any) -> bool:
                 interactive = True
             if "c" in arg[1:]:
                 return interactive
+            position += 1
         return interactive
 
     return False
