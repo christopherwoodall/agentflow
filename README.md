@@ -45,10 +45,12 @@ Inspect the resolved launch plan before running it:
 
 ```bash
 agentflow inspect examples/local-real-agents-kimi-smoke.yaml
+agentflow inspect examples/local-real-agents-kimi-smoke.yaml --output json-summary
 agentflow inspect examples/pipeline.yaml --node review --output json
 ```
 
 The default summary view now includes resolved per-node model and provider details when they are set, which makes it easier to verify mixed Codex, Claude, and Kimi launch configs before you execute a run.
+Use `--output json-summary` when you want the same compact information in a machine-readable format without the full prepared env and payload details from `--output json`.
 
 Run a pipeline once:
 
