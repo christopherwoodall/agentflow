@@ -2278,6 +2278,57 @@ def test_smoke_runs_when_bundled_preflight_warns(monkeypatch):
     assert captured["wait_timeout"] is None
 
 
+def test_smoke_warns_when_bundled_preflight_detects_launch_env_override(tmp_path, monkeypatch):
+    pipeline_path = tmp_path / "bundled-smoke.yaml"
+    pipeline_path.write_text(
+        """name: bundled-smoke
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    provider: kimi
+    prompt: hi
+    target:
+      kind: local
+      shell: bash
+      shell_login: true
+      shell_interactive: true
+      shell_init: kimi
+""",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            captured["submitted_pipeline"] = pipeline
+            return SimpleNamespace(id="smoke-launch-env-warning")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            return _completed_run(run_id, pipeline_name="bundled-smoke")
+
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: str(pipeline_path))
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()),
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "super-secret")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
+
+    result = runner.invoke(app, ["smoke"])
+
+    assert result.exit_code == 0
+    assert "Run smoke-launch-env-warning: completed" in result.stdout
+    assert result.stderr == (
+        "Doctor: warning\n"
+        "- kimi_shell_helper: ok - ready\n"
+        "- launch_env_override: warning - Node `review`: Launch env overrides current `ANTHROPIC_BASE_URL` from `https://open.bigmodel.cn/api/anthropic` to `https://api.kimi.com/coding/`.\n"
+    )
+    assert getattr(captured["submitted_pipeline"], "name", None) == "bundled-smoke"
+
+
 def test_smoke_show_preflight_prints_successful_summary_to_stderr(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -2909,6 +2960,7 @@ def test_smoke_supports_json_summary_output(monkeypatch):
 
 
 def test_doctor_outputs_json_report(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
 
     result = runner.invoke(app, ["doctor", "--output", "json"])
@@ -2921,6 +2973,7 @@ def test_doctor_outputs_json_report(monkeypatch):
 
 
 def test_doctor_defaults_to_json_report(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
 
     result = runner.invoke(app, ["doctor"])
@@ -2933,6 +2986,7 @@ def test_doctor_defaults_to_json_report(monkeypatch):
 
 
 def test_doctor_supports_summary_output(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
 
     result = runner.invoke(app, ["doctor", "--output", "summary"])
@@ -3558,7 +3612,75 @@ def test_doctor_with_pipeline_path_reports_auto_preflight_metadata_in_json(monke
     }
 
 
+def test_doctor_with_pipeline_path_warns_when_launch_env_overrides_current_base_url(tmp_path, monkeypatch):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: doctor-base-url-override
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    provider: kimi
+    prompt: hi
+    target:
+      kind: local
+      shell: bash
+      shell_login: true
+      shell_interactive: true
+      shell_init: kimi
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "super-secret")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
+
+    result = runner.invoke(app, ["doctor", str(pipeline_path), "--output", "summary"])
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith(
+        "Doctor: warning\n"
+        "- kimi_shell_helper: ok - ready\n"
+        "- launch_env_override: warning - Node `review`: Launch env overrides current `ANTHROPIC_BASE_URL` from `https://open.bigmodel.cn/api/anthropic` to `https://api.kimi.com/coding/`.\n"
+    )
+
+
+def test_doctor_without_path_warns_when_bundled_smoke_overrides_current_base_url(tmp_path, monkeypatch):
+    pipeline_path = tmp_path / "bundled-smoke.yaml"
+    pipeline_path.write_text(
+        """name: bundled-smoke
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    provider: kimi
+    prompt: hi
+    target:
+      kind: local
+      shell: bash
+      shell_login: true
+      shell_interactive: true
+      shell_init: kimi
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: str(pipeline_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "super-secret")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
+
+    result = runner.invoke(app, ["doctor", "--output", "summary"])
+
+    assert result.exit_code == 0
+    assert result.stdout == (
+        "Doctor: warning\n"
+        "- kimi_shell_helper: ok - ready\n"
+        "- launch_env_override: warning - Node `review`: Launch env overrides current `ANTHROPIC_BASE_URL` from `https://open.bigmodel.cn/api/anthropic` to `https://api.kimi.com/coding/`.\n"
+    )
+
+
 def test_doctor_can_include_shell_bridge_in_json_output(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
     monkeypatch.setattr(
         agentflow.cli,
@@ -3587,6 +3709,7 @@ def test_doctor_can_include_shell_bridge_in_json_output(monkeypatch):
 
 
 def test_doctor_can_include_shell_bridge_in_summary_output(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
     monkeypatch.setattr(
         agentflow.cli,
@@ -3614,6 +3737,7 @@ def test_doctor_can_include_shell_bridge_in_summary_output(monkeypatch):
 
 
 def test_doctor_shell_bridge_summary_reports_when_no_fix_is_needed(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
     monkeypatch.setattr(agentflow.cli, "build_bash_login_shell_bridge_recommendation", lambda: None)
 
@@ -3629,9 +3753,12 @@ def test_doctor_command_does_not_import_web_stack(monkeypatch):
 import builtins
 import importlib
 import json
+import os
 
 from typer.testing import CliRunner
 from agentflow.doctor import DoctorCheck, DoctorReport
+
+os.environ.pop("ANTHROPIC_BASE_URL", None)
 
 original_import = builtins.__import__
 

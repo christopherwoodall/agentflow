@@ -338,10 +338,51 @@ def _doctor_report():
     return build_local_smoke_doctor_report()
 
 
+def _extend_doctor_report(report: object, extra_checks: list[DoctorCheck]) -> object:
+    if not extra_checks:
+        return report
+
+    current_checks = list(getattr(report, "checks", []) or [])
+    current_status = _status_value(getattr(report, "status", "ok"))
+    next_status = _merge_doctor_status(current_status, extra_checks)
+    return replace(report, status=next_status, checks=[*current_checks, *extra_checks])
+
+
+def _pipeline_launch_env_override_checks(pipeline: object) -> list[DoctorCheck]:
+    from agentflow.inspection import build_launch_inspection
+
+    try:
+        report = build_launch_inspection(
+            pipeline,
+            runs_dir=str((Path.cwd() / ".agentflow" / "doctor").resolve()),
+        )
+    except Exception:
+        return []
+
+    checks: list[DoctorCheck] = []
+    for node in report.get("nodes", []):
+        node_id = str(node.get("id") or "node")
+        for warning in node.get("warnings", []) or []:
+            if not isinstance(warning, str) or not warning.startswith("Launch env overrides current `"):
+                continue
+            checks.append(
+                DoctorCheck(
+                    name="launch_env_override",
+                    status="warning",
+                    detail=f"Node `{node_id}`: {warning}",
+                )
+            )
+    return checks
+
+
 def _doctor_report_for_path(path: str | None = None):
     report = _doctor_report()
     if path is None:
-        return report, None
+        try:
+            pipeline = _load_pipeline(default_smoke_pipeline_path())
+        except typer.Exit:
+            return report, None
+        return _extend_doctor_report(report, _pipeline_launch_env_override_checks(pipeline)), None
     pipeline = _load_pipeline(path)
     return _augment_preflight_report(report, pipeline), {"auto_preflight": _auto_smoke_preflight_metadata(path, pipeline)}
 
@@ -546,17 +587,12 @@ def _merge_doctor_status(current_status: str, extra_checks: list[DoctorCheck]) -
 def _augment_preflight_report(report: object, pipeline: object) -> object:
     extra_checks = [
         *_pipeline_kimi_shell_bootstrap_checks(pipeline),
+        *_pipeline_launch_env_override_checks(pipeline),
         *_pipeline_provider_credential_checks(pipeline),
         *build_pipeline_local_claude_readiness_checks(pipeline),
         *build_pipeline_local_codex_auth_checks(pipeline),
     ]
-    if not extra_checks:
-        return report
-
-    current_checks = list(getattr(report, "checks", []) or [])
-    current_status = _status_value(getattr(report, "status", "ok"))
-    next_status = _merge_doctor_status(current_status, extra_checks)
-    return replace(report, status=next_status, checks=[*current_checks, *extra_checks])
+    return _extend_doctor_report(report, extra_checks)
 
 
 def _auto_smoke_preflight_reason(path: str, pipeline: object) -> str | None:
@@ -630,6 +666,9 @@ def _load_pipeline_with_optional_smoke_preflight(
         report = _doctor_report()
         if pipeline is not None:
             report = _augment_preflight_report(report, pipeline)
+        elif selected_path_matches_bundled:
+            pipeline = _load_pipeline(selected_path)
+            report = _extend_doctor_report(report, _pipeline_launch_env_override_checks(pipeline))
         doctor_output = _structured_output_from_run_output(output)
         shell_bridge = _preflight_shell_bridge_recommendation(report)
         include_shell_bridge = shell_bridge is not None
