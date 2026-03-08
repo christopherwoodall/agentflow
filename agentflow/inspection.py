@@ -179,36 +179,70 @@ def _resolved_auth_requirement(node: NodeSpec) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _format_auth_source_summary(
+    api_key_env: str,
+    primary: tuple[str, str],
+    bootstrap_hint: tuple[str, str] | None = None,
+) -> str:
+    summary = f"`{api_key_env}` via {primary[0]}"
+    if bootstrap_hint is not None and bootstrap_hint[1] != primary[1]:
+        summary += f"; {bootstrap_hint[0]} also runs before launch"
+    return summary
+
+
 def _auth_summary(node: NodeSpec, resolved_provider: object) -> str | None:
     api_key_env, provider_name = _resolved_auth_requirement(node)
     if not api_key_env:
         return None
 
     target = node.target
+    explicit_bootstrap_source: tuple[str, str] | None = None
+    helper_bootstrap_source: tuple[str, str] | None = None
     if getattr(target, "kind", None) == "local":
         shell_init = getattr(target, "shell_init", None)
         if shell_init_exports_env_var(shell_init, api_key_env):
-            return f"`{api_key_env}` via `target.shell_init`"
+            explicit_bootstrap_source = ("`target.shell_init`", "target.shell_init")
 
         shell = getattr(target, "shell", None)
-        if shell_template_exports_env_var_before_command(shell if isinstance(shell, str) else None, api_key_env):
-            return f"`{api_key_env}` via `target.shell`"
+        if explicit_bootstrap_source is None and shell_template_exports_env_var_before_command(
+            shell if isinstance(shell, str) else None,
+            api_key_env,
+        ):
+            explicit_bootstrap_source = ("`target.shell`", "target.shell")
 
         if api_key_env == "ANTHROPIC_API_KEY" and provider_name == "kimi":
             if shell_init_uses_kimi_helper(shell_init):
-                return "`ANTHROPIC_API_KEY` via `target.shell_init` (`kimi` helper)"
-            if shell_command_uses_kimi_helper(shell if isinstance(shell, str) else None):
-                return "`ANTHROPIC_API_KEY` via `target.shell` (`kimi` helper)"
+                helper_bootstrap_source = ("`target.shell_init` (`kimi` helper)", "target.shell_init")
+            elif shell_command_uses_kimi_helper(shell if isinstance(shell, str) else None):
+                helper_bootstrap_source = ("`target.shell` (`kimi` helper)", "target.shell")
+
+    if explicit_bootstrap_source is not None:
+        return _format_auth_source_summary(api_key_env, explicit_bootstrap_source, helper_bootstrap_source)
 
     if _has_nonempty_env_value(node.env, api_key_env):
-        return f"`{api_key_env}` via `node.env`"
+        return _format_auth_source_summary(
+            api_key_env,
+            ("`node.env`", "node.env"),
+            helper_bootstrap_source,
+        )
 
     provider_env = getattr(resolved_provider, "env", None)
     if _has_nonempty_env_value(provider_env, api_key_env):
-        return f"`{api_key_env}` via `provider.env`"
+        return _format_auth_source_summary(
+            api_key_env,
+            ("`provider.env`", "provider.env"),
+            helper_bootstrap_source,
+        )
 
     if str(os.getenv(api_key_env, "")).strip():
-        return f"`{api_key_env}` via current environment"
+        return _format_auth_source_summary(
+            api_key_env,
+            ("current environment", "current environment"),
+            helper_bootstrap_source,
+        )
+
+    if helper_bootstrap_source is not None:
+        return _format_auth_source_summary(api_key_env, helper_bootstrap_source)
 
     if node.agent == AgentKind.CODEX:
         return "Codex CLI login or `OPENAI_API_KEY` via current environment"
