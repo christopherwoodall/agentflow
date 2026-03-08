@@ -4,6 +4,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+from agentflow.local_shell import kimi_shell_init_requires_interactive_bash_warning
 from agentflow.agents.registry import AdapterRegistry, default_adapter_registry
 from agentflow.context import render_node_prompt
 from agentflow.prepared import build_execution_paths
@@ -170,6 +171,16 @@ def _bootstrap_summary(target: dict[str, Any]) -> str | None:
     return ", ".join(parts)
 
 
+def _target_warnings(target: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+
+    kimi_warning = kimi_shell_init_requires_interactive_bash_warning(target)
+    if kimi_warning:
+        warnings.append(kimi_warning)
+
+    return warnings
+
+
 def _execution_mode_summary(node_plan: dict[str, Any]) -> str | None:
     parts: list[str] = []
 
@@ -184,6 +195,12 @@ def _execution_mode_summary(node_plan: dict[str, Any]) -> str | None:
     if not parts:
         return None
     return ", ".join(parts)
+
+
+def _mcp_names(node_plan: dict[str, Any]) -> list[str]:
+    mcps = node_plan.get("mcps") or []
+    names = [str(item.get("name")) for item in mcps if isinstance(item, dict) and item.get("name")]
+    return names
 
 
 def build_launch_inspection(
@@ -227,6 +244,8 @@ def build_launch_inspection(
             "model": node.model,
             "tools": node.tools.value,
             "capture": node.capture.value,
+            "skills": list(node.skills),
+            "mcps": [mcp.model_dump(mode="json") for mcp in node.mcps],
             "depends_on": list(node.depends_on),
             "provider": node.provider.model_dump(mode="json") if hasattr(node.provider, "model_dump") else node.provider,
             "resolved_provider": resolved_provider.model_dump(mode="json") if resolved_provider is not None else None,
@@ -256,6 +275,7 @@ def build_launch_inspection(
                 "payload": _sanitize_payload(launch.payload),
             },
         }
+        node_plan["warnings"] = _target_warnings(node_plan["target"])
         node_plan["launch"]["payload_summary"] = _payload_summary(node_plan)
         inspected_nodes.append(node_plan)
 
@@ -319,6 +339,12 @@ def build_launch_inspection_summary(report: dict[str, Any]) -> dict[str, Any]:
         capture = node.get("capture")
         if capture:
             node_summary["capture"] = capture
+        skills = node.get("skills")
+        if skills:
+            node_summary["skills"] = list(skills)
+        mcp_names = _mcp_names(node)
+        if mcp_names:
+            node_summary["mcps"] = mcp_names
         provider_summary = _provider_summary(node)
         if provider_summary:
             node_summary["provider"] = provider_summary
@@ -345,6 +371,9 @@ def build_launch_inspection_summary(report: dict[str, Any]) -> dict[str, Any]:
         payload_summary = node.get("launch", {}).get("payload_summary")
         if payload_summary:
             node_summary["payload"] = payload_summary
+        warnings = node.get("warnings")
+        if warnings:
+            node_summary["warnings"] = list(warnings)
         summary["nodes"].append(node_summary)
 
     return summary
@@ -375,6 +404,12 @@ def render_launch_inspection_summary(report: dict[str, Any]) -> str:
         execution_mode_summary = _execution_mode_summary(node)
         if execution_mode_summary:
             lines.append(f"  Mode: {execution_mode_summary}")
+        skills = node.get("skills") or []
+        if skills:
+            lines.append(f"  Skills: {', '.join(skills)}")
+        mcp_names = _mcp_names(node)
+        if mcp_names:
+            lines.append(f"  MCPs: {', '.join(mcp_names)}")
         provider_summary = _provider_summary(node)
         if provider_summary:
             lines.append(f"  Provider: {provider_summary}")
@@ -401,4 +436,6 @@ def render_launch_inspection_summary(report: dict[str, Any]) -> str:
         payload_summary = node["launch"].get("payload_summary")
         if payload_summary:
             lines.append(f"  Payload: {payload_summary}")
+        for warning in node.get("warnings", []):
+            lines.append(f"  Warning: {warning}")
     return "\n".join(lines)

@@ -330,6 +330,58 @@ nodes:
     ]
 
 
+def test_inspect_command_warns_when_kimi_shell_init_is_not_interactive(tmp_path):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-kimi-warning
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    prompt: hi
+    target:
+      kind: local
+      shell: bash
+      shell_login: true
+      shell_init: kimi
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path)])
+
+    assert result.exit_code == 0
+    assert "Warning: `shell_init: kimi` uses bash without interactive startup; helpers from `~/.bashrc` are usually unavailable." in result.stdout
+    assert "Set `target.shell_interactive: true` or use `bash -lic`." in result.stdout
+
+
+def test_inspect_command_json_summary_includes_kimi_shell_init_warning(tmp_path):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-kimi-warning-json
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    prompt: hi
+    target:
+      kind: local
+      shell: bash
+      shell_login: true
+      shell_init: kimi
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["nodes"][0]["warnings"] == [
+        "`shell_init: kimi` uses bash without interactive startup; helpers from `~/.bashrc` are usually unavailable. Set `target.shell_interactive: true` or use `bash -lic`."
+    ]
+
+
 def test_inspect_command_redacts_auth_and_header_style_env_keys(tmp_path, monkeypatch):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(
@@ -382,6 +434,41 @@ nodes:
     assert result.exit_code == 0
     assert "Model: claude-sonnet-4-5" in result.stdout
     assert "Provider: kimi, key=ANTHROPIC_API_KEY, url=https://api.kimi.com/coding/" in result.stdout
+
+
+def test_inspect_command_surfaces_skills_and_mcp_names(tmp_path):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-integrations
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    prompt: hi
+    skills: [repo-map, release-notes]
+    mcps:
+      - name: github
+        transport: streamable_http
+        url: https://example.com/mcp
+      - name: filesystem
+        command: npx
+        args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+""",
+        encoding="utf-8",
+    )
+
+    summary_result = runner.invoke(app, ["inspect", str(pipeline_path)])
+
+    assert summary_result.exit_code == 0
+    assert "Skills: repo-map, release-notes" in summary_result.stdout
+    assert "MCPs: github, filesystem" in summary_result.stdout
+
+    json_summary_result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json-summary"])
+
+    assert json_summary_result.exit_code == 0
+    payload = json.loads(json_summary_result.stdout)
+    assert payload["nodes"][0]["skills"] == ["repo-map", "release-notes"]
+    assert payload["nodes"][0]["mcps"] == ["github", "filesystem"]
 
 
 def test_inspect_command_rejects_unknown_nodes(tmp_path):
