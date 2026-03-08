@@ -331,6 +331,35 @@ nodes:
     ]
 
 
+def test_inspect_command_ignores_non_helper_kimi_substrings_in_auto_preflight(tmp_path):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-kimi-substrings
+working_dir: .
+nodes:
+  - id: plan
+    agent: codex
+    prompt: hi
+    target:
+      kind: local
+      shell: "bash -lc 'printf kimi-ready'"
+      shell_init: echo kimi-ready
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["pipeline"]["auto_preflight"] == {
+        "enabled": False,
+        "reason": "path does not match the bundled smoke pipeline and no local Codex/Claude node uses `kimi` bootstrap.",
+        "matches": [],
+        "match_summary": [],
+    }
+
+
 def test_inspect_command_warns_when_kimi_shell_init_is_not_interactive(tmp_path):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(
@@ -789,6 +818,44 @@ def test_run_auto_runs_preflight_for_custom_pipeline_with_kimi_shell_init(monkey
     assert captured["loaded_path"] == "custom-run.yaml"
     assert captured["submitted_pipeline"] is fake_pipeline
     assert captured["wait_run_id"] == "run-custom-kimi"
+    assert captured["wait_timeout"] is None
+
+
+def test_run_auto_ignores_non_helper_kimi_substrings(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            captured["submitted_pipeline"] = pipeline
+            return SimpleNamespace(id="run-custom-non-kimi")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            captured["wait_run_id"] = run_id
+            captured["wait_timeout"] = timeout
+            return _completed_run(run_id, pipeline_name="custom-non-kimi-run")
+
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: (_ for _ in ()).throw(AssertionError("doctor should not run")))
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()),
+    )
+    fake_pipeline = SimpleNamespace(
+        nodes=[
+            SimpleNamespace(
+                agent=SimpleNamespace(value="codex"),
+                target=SimpleNamespace(kind="local", shell="bash -lc 'printf kimi-ready'", shell_init="echo kimi-ready"),
+            )
+        ]
+    )
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", _capture_pipeline_loader(captured, fake_pipeline))
+
+    result = runner.invoke(app, ["run", "custom-run.yaml"])
+
+    assert result.exit_code == 0
+    assert captured["loaded_path"] == "custom-run.yaml"
+    assert captured["submitted_pipeline"] is fake_pipeline
+    assert captured["wait_run_id"] == "run-custom-non-kimi"
     assert captured["wait_timeout"] is None
 
 
