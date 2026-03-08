@@ -977,6 +977,42 @@ nodes:
     assert payload["nodes"][0].get("warnings") is None
 
 
+def test_inspect_command_accepts_bash_env_wrapper_that_sources_helper_file(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".agentflow-kimi").write_text("kimi(){ :; }\n", encoding="utf-8")
+    (home / "shell.env").write_text('source "$HOME/.agentflow-kimi"\n', encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-kimi-bash-env-source
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    prompt: hi
+    target:
+      kind: local
+      shell: "env BASH_ENV=$HOME/shell.env bash -c 'kimi && {command}'"
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["pipeline"] == {
+        "name": "inspect-kimi-bash-env-source",
+        "working_dir": str(tmp_path.resolve()),
+        "node_count": 1,
+        "auto_preflight": "enabled - local Codex/Claude/Kimi nodes use a `kimi` shell bootstrap.",
+        "auto_preflight_matches": ["review (claude) via `target.shell`"],
+    }
+    assert payload["nodes"][0].get("warnings") is None
+
+
 def test_inspect_command_json_summary_includes_kimi_shell_init_warning(tmp_path):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(
