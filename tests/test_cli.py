@@ -208,6 +208,33 @@ nodes:
     assert "Prompt: Review this: <inspect placeholder for nodes.plan.output>" in result.stdout
 
 
+def test_inspect_command_node_filter_omits_unrelated_placeholder_note(tmp_path):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-node-filter
+working_dir: .
+nodes:
+  - id: plan
+    agent: codex
+    prompt: "Reply with exactly: codex ok"
+
+  - id: review
+    agent: claude
+    depends_on: [plan]
+    prompt: |
+      Review this: {{ nodes.plan.output }}
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--node", "plan"])
+
+    assert result.exit_code == 0
+    assert "- plan [codex/local]" in result.stdout
+    assert "- review [claude/local]" not in result.stdout
+    assert "Note: Dependency references use placeholder node outputs" not in result.stdout
+
+
 def test_inspect_command_supports_json_output_and_redacts_env(tmp_path, monkeypatch):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(
