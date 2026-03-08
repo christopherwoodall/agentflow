@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from agentflow.agents.base import AgentAdapter
@@ -76,8 +77,12 @@ class ClaudeAdapter(AgentAdapter):
             env.update(provider.env)
             if provider.base_url:
                 env.setdefault("ANTHROPIC_BASE_URL", provider.base_url)
+            if provider.headers:
+                env.setdefault("ANTHROPIC_CUSTOM_HEADERS", json.dumps(provider.headers, ensure_ascii=False))
             if provider.api_key_env:
-                env.setdefault("ANTHROPIC_API_KEY_ENV", provider.api_key_env)
+                api_key = env.get(provider.api_key_env) or os.getenv(provider.api_key_env)
+                if api_key:
+                    env.setdefault("ANTHROPIC_API_KEY", api_key)
         command.extend(node.extra_args)
         return PreparedExecution(
             command=command,

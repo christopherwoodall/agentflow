@@ -72,8 +72,8 @@ class CodexAdapter(AgentAdapter):
             "exec",
             "--json",
             "--skip-git-repo-check",
-            "--ask-for-approval",
-            "never",
+            "-c",
+            'approval_policy="never"',
             "--sandbox",
             sandbox,
         ]
