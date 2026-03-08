@@ -126,6 +126,30 @@ def _provider_summary(node_plan: dict[str, Any]) -> str | None:
     return ", ".join(parts)
 
 
+def _bootstrap_summary(target: dict[str, Any]) -> str | None:
+    if target.get("kind") != "local":
+        return None
+
+    parts: list[str] = []
+    shell = target.get("shell")
+    if shell:
+        parts.append(f"shell={shell}")
+
+    if target.get("shell_login"):
+        parts.append("login=true")
+
+    if target.get("shell_interactive"):
+        parts.append("interactive=true")
+
+    shell_init = target.get("shell_init")
+    if shell_init:
+        parts.append(f"init={shell_init}")
+
+    if not parts:
+        return None
+    return ", ".join(parts)
+
+
 def build_launch_inspection(
     pipeline: PipelineSpec,
     *,
@@ -246,6 +270,9 @@ def build_launch_inspection_summary(report: dict[str, Any]) -> dict[str, Any]:
         provider_summary = _provider_summary(node)
         if provider_summary:
             node_summary["provider"] = provider_summary
+        bootstrap_summary = _bootstrap_summary(node["target"])
+        if bootstrap_summary:
+            node_summary["bootstrap"] = bootstrap_summary
         prompt_preview = node.get("rendered_prompt_preview")
         if prompt_preview:
             node_summary["prompt_preview"] = prompt_preview
@@ -289,6 +316,9 @@ def render_launch_inspection_summary(report: dict[str, Any]) -> str:
         provider_summary = _provider_summary(node)
         if provider_summary:
             lines.append(f"  Provider: {provider_summary}")
+        bootstrap_summary = _bootstrap_summary(node["target"])
+        if bootstrap_summary:
+            lines.append(f"  Bootstrap: {bootstrap_summary}")
         prompt_preview = node.get("rendered_prompt_preview")
         if prompt_preview:
             lines.append(f"  Prompt: {prompt_preview}")

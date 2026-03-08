@@ -138,6 +138,7 @@ nodes:
     assert "Note: Dependency references use placeholder node outputs" in result.stdout
     assert "- plan [codex/local]" in result.stdout
     assert "Model: gpt-5" in result.stdout
+    assert "Bootstrap: shell=bash, login=true, interactive=true, init=kimi" in result.stdout
     assert "Launch: bash -l -i -c 'kimi && eval \"$AGENTFLOW_TARGET_COMMAND\"'" in result.stdout
     assert "Runtime files: codex_home/config.toml" in result.stdout
     assert "Prompt: Review this: <inspect placeholder for nodes.plan.output>" in result.stdout
@@ -219,6 +220,7 @@ nodes:
             "agent": "claude",
             "target": "local",
             "provider": "kimi, key=ANTHROPIC_API_KEY, url=https://api.kimi.com/coding/",
+            "bootstrap": "shell=bash, login=true, interactive=true, init=kimi",
             "prompt_preview": "Reply with exactly: claude ok",
             "prepared_command": "claude -p 'Reply with exactly: claude ok' --output-format stream-json --verbose --permission-mode bypassPermissions --tools Read,Glob,Grep,LS,NotebookRead,Task,TaskOutput,TodoRead,WebFetch,WebSearch",
             "launch": "bash -l -i -c 'kimi && eval \"$AGENTFLOW_TARGET_COMMAND\"'",
