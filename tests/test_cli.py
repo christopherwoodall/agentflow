@@ -360,6 +360,35 @@ nodes:
     }
 
 
+def test_inspect_command_ignores_kimi_probe_commands_in_auto_preflight(tmp_path):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-kimi-probes
+working_dir: .
+nodes:
+  - id: plan
+    agent: codex
+    prompt: hi
+    target:
+      kind: local
+      shell: "bash -lc 'command -v kimi >/dev/null && {command}'"
+      shell_init: type kimi >/dev/null 2>&1
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["pipeline"]["auto_preflight"] == {
+        "enabled": False,
+        "reason": "path does not match the bundled smoke pipeline and no local Codex/Claude node uses `kimi` bootstrap.",
+        "matches": [],
+        "match_summary": [],
+    }
+
+
 def test_inspect_command_warns_when_kimi_shell_init_is_not_interactive(tmp_path):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(
