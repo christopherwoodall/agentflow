@@ -98,6 +98,7 @@ agentflow doctor
 ```
 
 `agentflow doctor` prints JSON by default so CI and wrapper scripts can parse it directly. Use `agentflow doctor --output summary` when you want a quick human-readable checklist instead.
+For the bundled smoke pipeline and custom local Kimi-bootstrapped Codex/Claude/Kimi DAGs, Doctor now also warns when the current shell exports conflicting launch values such as `ANTHROPIC_BASE_URL` that a node will replace at launch.
 
 You can also point Doctor at a custom pipeline to surface the same pipeline-specific local shell bootstrap warnings that `run` and `smoke` preflight use:
 
