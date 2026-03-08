@@ -52,7 +52,7 @@ else:
         return PreparedExecution(
             command=["python3", "-c", script, node.id, prompt, node.agent.value],
             env={},
-            cwd=str(paths.host_workdir),
+            cwd=paths.target_workdir,
             trace_kind=node.agent.value,
         )
 
@@ -128,6 +128,67 @@ async def test_orchestrator_applies_success_criteria(tmp_path: Path):
     completed = await orchestrator.wait(run.id, timeout=5)
     assert completed.nodes["writer"].status.value == "completed"
     assert (tmp_path / "artifact.txt").read_text(encoding="utf-8") == "file data"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_applies_file_success_criteria_in_local_target_cwd(tmp_path: Path):
+    orchestrator = make_orchestrator(tmp_path)
+    task_dir = tmp_path / "task"
+    task_dir.mkdir()
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "writer-target-cwd",
+            "working_dir": str(tmp_path),
+            "nodes": [
+                {
+                    "id": "writer",
+                    "agent": "codex",
+                    "prompt": "success",
+                    "target": {"kind": "local", "cwd": str(task_dir)},
+                    "success_criteria": [
+                        {"kind": "file_exists", "path": "artifact.txt"},
+                        {"kind": "file_contains", "path": "artifact.txt", "value": "file data"},
+                    ],
+                }
+            ],
+        }
+    )
+
+    run = await orchestrator.submit(pipeline)
+    completed = await orchestrator.wait(run.id, timeout=5)
+
+    assert completed.nodes["writer"].status.value == "completed"
+    assert (task_dir / "artifact.txt").read_text(encoding="utf-8") == "file data"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_resolves_relative_local_target_cwd_from_pipeline_workdir(tmp_path: Path):
+    orchestrator = make_orchestrator(tmp_path)
+    task_dir = tmp_path / "task"
+    task_dir.mkdir()
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "writer-relative-target-cwd",
+            "working_dir": str(tmp_path),
+            "nodes": [
+                {
+                    "id": "writer",
+                    "agent": "codex",
+                    "prompt": "success",
+                    "target": {"kind": "local", "cwd": "task"},
+                    "success_criteria": [
+                        {"kind": "file_exists", "path": "artifact.txt"},
+                    ],
+                }
+            ],
+        }
+    )
+
+    run = await orchestrator.submit(pipeline)
+    completed = await orchestrator.wait(run.id, timeout=5)
+
+    assert completed.nodes["writer"].status.value == "completed"
+    assert (task_dir / "artifact.txt").read_text(encoding="utf-8") == "file data"
 
 
 @pytest.mark.asyncio

@@ -101,18 +101,30 @@ class Orchestrator:
         await self._publish(run_id, "run_completed", status=record.status.value)
         await self.store.persist_run(run_id)
 
+    def _resolve_local_workdir(self, pipeline_workdir: Path, cwd: str | None) -> Path:
+        if not cwd:
+            return pipeline_workdir
+
+        candidate = Path(cwd).expanduser()
+        if candidate.is_absolute():
+            return candidate
+        return (pipeline_workdir / candidate).resolve()
+
     def _build_paths(self, pipeline: PipelineSpec, run_id: str, node_id: str, node_target: Any) -> ExecutionPaths:
-        host_workdir = pipeline.working_path
+        pipeline_workdir = pipeline.working_path
         host_runtime_dir = ensure_dir(self.store.base_dir / run_id / "runtime" / node_id)
         app_root = Path(__file__).resolve().parents[1]
         if node_target.kind == "container":
+            host_workdir = pipeline_workdir
             target_workdir = node_target.workdir_mount
             target_runtime_dir = node_target.runtime_mount
         elif node_target.kind == "aws_lambda":
+            host_workdir = pipeline_workdir
             target_workdir = node_target.remote_workdir
             target_runtime_dir = f"{node_target.remote_workdir.rstrip('/')}/.agentflow-runtime/{node_id}"
         else:
-            target_workdir = node_target.cwd or str(host_workdir)
+            host_workdir = self._resolve_local_workdir(pipeline_workdir, node_target.cwd)
+            target_workdir = str(host_workdir)
             target_runtime_dir = str(host_runtime_dir)
         return ExecutionPaths(
             host_workdir=host_workdir,
@@ -202,7 +214,7 @@ class Orchestrator:
             result.exit_code = raw.exit_code
             result.final_response = parser.finalize() or "\n".join(result.stdout_lines).strip()
             result.output = result.final_response if node.capture.value == "final" else "\n".join(result.stdout_lines)
-            success_ok, success_details = evaluate_success(node, result, pipeline.working_path)
+            success_ok, success_details = evaluate_success(node, result, paths.host_workdir)
             result.success = success_ok
             result.success_details = success_details
             attempt.finished_at = utcnow_iso()
