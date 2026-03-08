@@ -161,6 +161,15 @@ def _echo_doctor_report(report: object, *, err: bool = False) -> None:
     typer.echo(json.dumps(report.as_dict(), indent=2), err=err)
 
 
+def _echo_inspection(report: dict[str, object], *, output: RunOutputFormat) -> None:
+    if output == RunOutputFormat.SUMMARY:
+        from agentflow.inspection import render_launch_inspection_summary
+
+        typer.echo(render_launch_inspection_summary(report))
+        return
+    typer.echo(json.dumps(report, indent=2))
+
+
 @app.command()
 def serve(
     host: str = "127.0.0.1",
@@ -176,6 +185,23 @@ def serve(
 def validate(path: str) -> None:
     pipeline = _load_pipeline(path)
     typer.echo(json.dumps(pipeline.model_dump(mode="json"), indent=2))
+
+
+@app.command()
+def inspect(
+    path: str,
+    node: list[str] = typer.Option(None, "--node", "-n", help="Inspect only the selected node ids."),
+    runs_dir: str = typer.Option(".agentflow/runs", envvar="AGENTFLOW_RUNS_DIR"),
+    output: RunOutputFormat = typer.Option(RunOutputFormat.SUMMARY, "--output", help="Result output format."),
+) -> None:
+    from agentflow.inspection import build_launch_inspection
+
+    pipeline = _load_pipeline(path)
+    try:
+        report = build_launch_inspection(pipeline, runs_dir=runs_dir, node_ids=node or None)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--node") from exc
+    _echo_inspection(report, output=output)
 
 
 @app.command()

@@ -103,6 +103,95 @@ nodes:
     assert payload["nodes"][0]["target"]["cwd"] == str(task_dir.resolve())
 
 
+def test_inspect_command_outputs_launch_summary(tmp_path, monkeypatch):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-demo
+working_dir: .
+nodes:
+  - id: plan
+    agent: codex
+    model: gpt-5
+    prompt: "Reply with exactly: codex ok"
+    target:
+      kind: local
+      shell: bash
+      shell_login: true
+      shell_interactive: true
+      shell_init: kimi
+
+  - id: review
+    agent: claude
+    depends_on: [plan]
+    prompt: |
+      Review this: {{ nodes.plan.output }}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path)])
+
+    assert result.exit_code == 0
+    assert "Pipeline: inspect-demo" in result.stdout
+    assert "Note: Dependency references use placeholder node outputs" in result.stdout
+    assert "- plan [codex/local]" in result.stdout
+    assert "Launch: bash -l -i -c 'kimi && eval \"$AGENTFLOW_TARGET_COMMAND\"'" in result.stdout
+    assert "Runtime files: codex_home/config.toml" in result.stdout
+    assert "Prompt: Review this: <inspect placeholder for nodes.plan.output>" in result.stdout
+
+
+def test_inspect_command_supports_json_output_and_redacts_env(tmp_path, monkeypatch):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-json
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    provider: kimi
+    prompt: "Reply with exactly: claude ok"
+    target:
+      kind: local
+      shell: bash
+      shell_login: true
+      shell_interactive: true
+      shell_init: kimi
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "super-secret")
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--node", "review", "--output", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["pipeline"]["name"] == "inspect-json"
+    assert [node["id"] for node in payload["nodes"]] == ["review"]
+    assert payload["nodes"][0]["prepared"]["env"]["ANTHROPIC_API_KEY"] == "<redacted>"
+    assert payload["nodes"][0]["launch"]["env"]["ANTHROPIC_API_KEY"] == "<redacted>"
+    assert payload["nodes"][0]["launch"]["env"]["ANTHROPIC_BASE_URL"] == "https://api.kimi.com/coding/"
+
+
+def test_inspect_command_rejects_unknown_nodes(tmp_path):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-error
+working_dir: .
+nodes:
+  - id: alpha
+    agent: codex
+    prompt: hi
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--node", "missing"])
+
+    assert result.exit_code != 0
+    assert "unknown node ids: ['missing']" in result.stderr
+
+
 def test_serve_uses_runtime_env_vars(monkeypatch):
     captured: dict[str, object] = {}
 
