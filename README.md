@@ -73,6 +73,7 @@ The bundled smoke now launches both `codex` and `claude` inside `bash -lic` so l
 By default, `agentflow smoke` now prints a compact per-node summary instead of the full run record JSON. Use `agentflow smoke --output json` when you want the complete machine-readable payload.
 
 The bundled smoke preflight now matches that output mode too, so warning and failure reports stay in summary form by default and switch to JSON when you pass `--output json`.
+Use `--preflight always` when you point `agentflow smoke` at a custom local Codex/Claude-on-Kimi smoke pipeline and still want the same preflight checks, or `--preflight never` when you need to skip them. In the default `auto` mode, AgentFlow also runs the preflight when you pass the bundled smoke path explicitly.
 
 Check the local Codex/Claude/Kimi smoke prerequisites without launching a run:
 
@@ -292,7 +293,7 @@ You can run the same preflight directly:
 agentflow doctor
 ```
 
-The bundled smoke pipeline bootstraps the `kimi` shell helper inside the Claude node, so you do not need to wrap the entire `agentflow smoke` command in `bash -lic`. If you want to run a custom smoke pipeline instead, pass its path explicitly with `agentflow smoke path/to/pipeline.yaml`. Add `--output json` to either form when you want the full persisted run record instead of the compact summary.
+The bundled smoke pipeline bootstraps the `kimi` shell helper inside the Claude node, so you do not need to wrap the entire `agentflow smoke` command in `bash -lic`. If you want to run a custom smoke pipeline instead, pass its path explicitly with `agentflow smoke path/to/pipeline.yaml`. Add `--preflight always` when that custom pipeline still depends on the same local Codex/Claude/Kimi bootstrap checks, or `--preflight never` to skip preflight even for the bundled example. Add `--output json` to either form when you want the full persisted run record instead of the compact summary.
 
 ## Reference sources
 
