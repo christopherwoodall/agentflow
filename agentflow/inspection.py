@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shlex
 from pathlib import Path
 from typing import Any
@@ -8,12 +9,16 @@ from agentflow.local_shell import (
     kimi_shell_init_requires_bash_warning,
     kimi_shell_init_requires_interactive_bash_warning,
     render_shell_init,
+    shell_command_uses_kimi_helper,
+    shell_init_exports_env_var,
+    shell_init_uses_kimi_helper,
+    shell_template_exports_env_var_before_command,
 )
 from agentflow.agents.registry import AdapterRegistry, default_adapter_registry
 from agentflow.context import render_node_prompt
 from agentflow.prepared import build_execution_paths
 from agentflow.runners.registry import RunnerRegistry, default_runner_registry
-from agentflow.specs import NodeResult, NodeSpec, NodeStatus, PipelineSpec, resolve_provider
+from agentflow.specs import AgentKind, NodeResult, NodeSpec, NodeStatus, PipelineSpec, resolve_provider
 from agentflow.utils import looks_sensitive_key, redact_sensitive_shell_text, redact_sensitive_shell_value
 
 _REDACTED = "<redacted>"
@@ -159,6 +164,61 @@ def _provider_summary(node_plan: dict[str, Any]) -> str | None:
     return ", ".join(parts)
 
 
+def _has_nonempty_env_value(env: object, key: str) -> bool:
+    return isinstance(env, dict) and bool(str(env.get(key, "")).strip())
+
+
+def _resolved_auth_requirement(node: NodeSpec) -> tuple[str | None, str | None]:
+    resolved_provider = resolve_provider(node.provider, node.agent)
+    if resolved_provider is not None and resolved_provider.api_key_env:
+        return resolved_provider.api_key_env, resolved_provider.name
+    if node.agent == AgentKind.KIMI:
+        return "KIMI_API_KEY", "moonshot"
+    if node.agent == AgentKind.CODEX:
+        return "OPENAI_API_KEY", "openai"
+    return None, None
+
+
+def _auth_summary(node: NodeSpec, resolved_provider: object) -> str | None:
+    api_key_env, provider_name = _resolved_auth_requirement(node)
+    if not api_key_env:
+        return None
+
+    target = node.target
+    if getattr(target, "kind", None) == "local":
+        shell_init = getattr(target, "shell_init", None)
+        if shell_init_exports_env_var(shell_init, api_key_env):
+            return f"`{api_key_env}` via `target.shell_init`"
+
+        shell = getattr(target, "shell", None)
+        if shell_template_exports_env_var_before_command(shell if isinstance(shell, str) else None, api_key_env):
+            return f"`{api_key_env}` via `target.shell`"
+
+        if api_key_env == "ANTHROPIC_API_KEY" and provider_name == "kimi":
+            if shell_init_uses_kimi_helper(shell_init):
+                return "`ANTHROPIC_API_KEY` via `target.shell_init` (`kimi` helper)"
+            if shell_command_uses_kimi_helper(shell if isinstance(shell, str) else None):
+                return "`ANTHROPIC_API_KEY` via `target.shell` (`kimi` helper)"
+
+    provider_env = getattr(resolved_provider, "env", None)
+    if _has_nonempty_env_value(provider_env, api_key_env):
+        return f"`{api_key_env}` via `provider.env`"
+
+    if _has_nonempty_env_value(node.env, api_key_env):
+        return f"`{api_key_env}` via `node.env`"
+
+    if str(os.getenv(api_key_env, "")).strip():
+        return f"`{api_key_env}` via current environment"
+
+    if node.agent == AgentKind.CODEX:
+        return "Codex CLI login or `OPENAI_API_KEY` via current environment"
+
+    expectation_sources = ["current environment", "`node.env`", "`provider.env`"]
+    if getattr(target, "kind", None) == "local":
+        expectation_sources.append("local shell bootstrap")
+    return f"expects `{api_key_env}` via {', '.join(expectation_sources[:-1])}, or {expectation_sources[-1]}"
+
+
 def _bootstrap_summary(target: dict[str, Any]) -> str | None:
     if target.get("kind") != "local":
         return None
@@ -291,6 +351,9 @@ def build_launch_inspection(
                 "payload": _sanitize_payload(launch.payload),
             },
         }
+        auth_summary = _auth_summary(node, resolved_provider)
+        if auth_summary:
+            node_plan["auth"] = auth_summary
         node_plan["warnings"] = _target_warnings(node_plan["target"])
         node_plan["launch"]["payload_summary"] = _payload_summary(node_plan)
         inspected_nodes.append(node_plan)
@@ -364,6 +427,9 @@ def build_launch_inspection_summary(report: dict[str, Any]) -> dict[str, Any]:
         provider_summary = _provider_summary(node)
         if provider_summary:
             node_summary["provider"] = provider_summary
+        auth_summary = node.get("auth")
+        if auth_summary:
+            node_summary["auth"] = auth_summary
         bootstrap_summary = _bootstrap_summary(node["target"])
         if bootstrap_summary:
             node_summary["bootstrap"] = bootstrap_summary
@@ -429,6 +495,9 @@ def render_launch_inspection_summary(report: dict[str, Any]) -> str:
         provider_summary = _provider_summary(node)
         if provider_summary:
             lines.append(f"  Provider: {provider_summary}")
+        auth_summary = node.get("auth")
+        if auth_summary:
+            lines.append(f"  Auth: {auth_summary}")
         bootstrap_summary = _bootstrap_summary(node["target"])
         if bootstrap_summary:
             lines.append(f"  Bootstrap: {bootstrap_summary}")
