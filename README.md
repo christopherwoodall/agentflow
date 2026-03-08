@@ -193,7 +193,7 @@ Invokes `agentflow.remote.lambda_handler.handler`. The payload contains the prep
 
 ### Kimi
 
-- Uses `python3 -m agentflow.remote.kimi_bridge`
+- Uses the active Python interpreter via `sys.executable -m agentflow.remote.kimi_bridge`
 - Emits a Kimi-style JSON-RPC event stream
 - Calls Moonshot's OpenAI-compatible chat completions API
 - Provides a small built-in tool layer for read, search, write, and shell actions
