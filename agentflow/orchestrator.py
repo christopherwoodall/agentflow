@@ -117,6 +117,35 @@ class Orchestrator:
         await self.store.append_artifact_text(run_id, node_id, "trace.jsonl", event.model_dump_json() + "\n")
         await self._publish(run_id, "node_trace", node_id=node_id, trace=event.model_dump(mode="json"))
 
+    def _is_sensitive_launch_key(self, key: str) -> bool:
+        upper = key.upper()
+        return upper in {"AUTHORIZATION", "X-API-KEY", "X_API_KEY"} or any(
+            marker in upper for marker in ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "COOKIE")
+        )
+
+    def _sanitize_launch_value(self, key: str | None, value: Any) -> Any:
+        if key and self._is_sensitive_launch_key(key) and value is not None:
+            return "<redacted>"
+        if isinstance(value, dict):
+            if key == "runtime_files":
+                return sorted(value)
+            return {inner_key: self._sanitize_launch_value(inner_key, inner_value) for inner_key, inner_value in value.items()}
+        if isinstance(value, list):
+            return [self._sanitize_launch_value(None, item) for item in value]
+        return value
+
+    def _launch_artifact_payload(self, attempt_number: int, plan: Any) -> dict[str, Any]:
+        return {
+            "attempt": attempt_number,
+            "kind": plan.kind,
+            "command": list(plan.command) if plan.command is not None else None,
+            "env": self._sanitize_launch_value("env", plan.env),
+            "cwd": plan.cwd,
+            "stdin": plan.stdin,
+            "runtime_files": list(plan.runtime_files),
+            "payload": self._sanitize_launch_value("payload", plan.payload),
+        }
+
     async def _mark_node_cancelled(self, run_id: str, node_id: str, reason: str) -> None:
         record = self.store.get_run(run_id)
         result = record.nodes[node_id]
@@ -149,6 +178,13 @@ class Orchestrator:
             result.attempts.append(attempt)
             parser.start_attempt(attempt_number)
             prepared = adapter.prepare(node, prompt, paths)
+            plan = runner.plan_execution(node, prepared, paths)
+            await self.store.write_artifact_json(
+                run_id,
+                node_id,
+                "launch.json",
+                self._launch_artifact_payload(attempt_number, plan),
+            )
             await self.store.append_artifact_text(
                 run_id,
                 node_id,

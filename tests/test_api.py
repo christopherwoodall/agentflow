@@ -72,6 +72,10 @@ def test_api_supports_validation_and_artifacts(tmp_path):
     artifact = client.get(f"/api/runs/{run_id}/artifacts/alpha/output.txt")
     assert artifact.status_code == 200
     assert artifact.text == "artifact output"
+    launch = client.get(f"/api/runs/{run_id}/artifacts/alpha/launch.json")
+    assert launch.status_code == 200
+    assert launch.json()["kind"] == "process"
+    assert launch.json()["command"][0] == "python3"
 
 
 def test_api_supports_cancel_and_rerun(tmp_path):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -54,6 +55,17 @@ else:
             env={},
             cwd=paths.target_workdir,
             trace_kind=node.agent.value,
+        )
+
+
+class LaunchPlanAdapter(AgentAdapter):
+    def prepare(self, node, prompt: str, paths: ExecutionPaths) -> PreparedExecution:
+        return PreparedExecution(
+            command=["python3", "-c", 'print("launch plan ok")'],
+            env={"OPENAI_API_KEY": "super-secret", "VISIBLE_FLAG": "visible"},
+            cwd=paths.target_workdir,
+            trace_kind=node.agent.value,
+            runtime_files={"config/runtime.env": "OPENAI_API_KEY=super-secret\n"},
         )
 
 
@@ -249,3 +261,43 @@ async def test_orchestrator_cancels_running_nodes(tmp_path: Path):
     assert completed.status.value == "cancelled"
     assert completed.nodes["slow"].status.value == "cancelled"
     assert "Cancelled by user" in orchestrator.store.read_artifact_text(completed.id, "slow", "stderr.log")
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_writes_redacted_launch_artifact(tmp_path: Path):
+    adapters = AdapterRegistry()
+    adapters.register(AgentKind.CODEX, LaunchPlanAdapter())
+    orchestrator = Orchestrator(store=RunStore(tmp_path / "runs"), adapters=adapters, runners=RunnerRegistry())
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "launch-artifact",
+            "working_dir": str(tmp_path),
+            "nodes": [
+                {
+                    "id": "alpha",
+                    "agent": "codex",
+                    "prompt": "launch",
+                    "target": {"kind": "local", "shell": "bash"},
+                }
+            ],
+        }
+    )
+
+    run = await orchestrator.submit(pipeline)
+    completed = await orchestrator.wait(run.id, timeout=5)
+
+    assert completed.status.value == "completed"
+    launch_artifact = json.loads(orchestrator.store.read_artifact_text(completed.id, "alpha", "launch.json"))
+    assert launch_artifact == {
+        "attempt": 1,
+        "kind": "process",
+        "command": ["bash", "-c", "python3 -c 'print(\"launch plan ok\")'"],
+        "env": {
+            "OPENAI_API_KEY": "<redacted>",
+            "VISIBLE_FLAG": "visible",
+        },
+        "cwd": str(tmp_path),
+        "stdin": None,
+        "runtime_files": ["config/runtime.env"],
+        "payload": None,
+    }
