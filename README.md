@@ -115,6 +115,8 @@ You can configure the runtime via CLI flags or environment variables.
 - `AGENTFLOW_RUNS_DIR`: base directory for run state and artifacts
 - `AGENTFLOW_MAX_CONCURRENT_RUNS`: maximum number of concurrently executing DAG runs
 
+`AGENTFLOW_RUNS_DIR` and `--runs-dir` accept home-relative paths such as `~/.agentflow/runs`.
+
 CLI equivalents:
 
 ```bash
