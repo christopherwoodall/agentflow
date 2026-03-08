@@ -364,6 +364,65 @@ def test_run_supports_summary_output(monkeypatch):
     assert "- codex_plan [codex, model=gpt-5-codex]: completed (attempt 1, exit 0) - codex ok" in result.stdout
 
 
+def test_run_supports_json_summary_output(monkeypatch):
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            return SimpleNamespace(id="run-json-summary")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            return _completed_run(
+                run_id,
+                pipeline_name="summary-pipeline",
+                pipeline_nodes=[
+                    SimpleNamespace(
+                        id="codex_plan",
+                        agent=SimpleNamespace(value="codex"),
+                        model="gpt-5-codex",
+                        provider=None,
+                    )
+                ],
+                nodes={
+                    "codex_plan": SimpleNamespace(
+                        status=SimpleNamespace(value="completed"),
+                        current_attempt=1,
+                        attempts=[SimpleNamespace(number=1)],
+                        exit_code=0,
+                        final_response="codex ok",
+                        output="codex ok",
+                        stderr_lines=[],
+                    )
+                },
+            )
+
+    monkeypatch.setattr(agentflow.cli, "_build_runtime", lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()))
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: object())
+
+    result = runner.invoke(app, ["run", "pipeline.yaml", "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {
+        "id": "run-json-summary",
+        "status": "completed",
+        "pipeline": {"name": "summary-pipeline"},
+        "started_at": "2026-03-08T04:11:03+00:00",
+        "finished_at": "2026-03-08T04:11:10+00:00",
+        "duration": "7.0s",
+        "duration_seconds": 7.0,
+        "run_dir": ".agentflow/runs/run-json-summary",
+        "nodes": [
+            {
+                "id": "codex_plan",
+                "status": "completed",
+                "agent": "codex",
+                "model": "gpt-5-codex",
+                "attempts": 1,
+                "exit_code": 0,
+                "preview": "codex ok",
+            }
+        ],
+    }
+
+
 def test_run_skips_preflight_for_custom_pipeline_in_auto_mode(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -943,6 +1002,70 @@ def test_smoke_supports_json_output(monkeypatch):
     assert json.loads(result.stdout) == {"id": "smoke-json", "status": "completed"}
 
 
+def test_smoke_supports_json_summary_output(monkeypatch):
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            return SimpleNamespace(id="smoke-json-summary")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            return _completed_run(
+                run_id,
+                pipeline_name="local-real-agents-kimi-smoke",
+                pipeline_nodes=[
+                    SimpleNamespace(
+                        id="codex_plan",
+                        agent=SimpleNamespace(value="codex"),
+                        model=None,
+                        provider=None,
+                    )
+                ],
+                nodes={
+                    "codex_plan": SimpleNamespace(
+                        status=SimpleNamespace(value="completed"),
+                        current_attempt=1,
+                        attempts=[SimpleNamespace(number=1)],
+                        exit_code=0,
+                        final_response="codex ok",
+                        output="codex ok",
+                        stderr_lines=[],
+                    )
+                },
+            )
+
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()),
+    )
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: object())
+
+    result = runner.invoke(app, ["smoke", "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {
+        "id": "smoke-json-summary",
+        "status": "completed",
+        "pipeline": {"name": "local-real-agents-kimi-smoke"},
+        "started_at": "2026-03-08T04:11:03+00:00",
+        "finished_at": "2026-03-08T04:11:10+00:00",
+        "duration": "7.0s",
+        "duration_seconds": 7.0,
+        "run_dir": ".agentflow/runs/smoke-json-summary",
+        "nodes": [
+            {
+                "id": "codex_plan",
+                "status": "completed",
+                "agent": "codex",
+                "attempts": 1,
+                "exit_code": 0,
+                "preview": "codex ok",
+            }
+        ],
+    }
+
+
 def test_doctor_outputs_json_report(monkeypatch):
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
 
@@ -1038,6 +1161,20 @@ def test_smoke_failed_preflight_honors_json_output(monkeypatch):
     monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: (_ for _ in ()).throw(AssertionError("pipeline should not load")))
 
     result = runner.invoke(app, ["smoke", "--output", "json"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "status": "failed",
+        "checks": [{"name": "kimi_shell_helper", "status": "failed", "detail": "missing"}],
+    }
+
+
+def test_smoke_failed_preflight_honors_json_summary_output(monkeypatch):
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report(status="failed", detail="missing"))
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: (_ for _ in ()).throw(AssertionError("pipeline should not load")))
+
+    result = runner.invoke(app, ["smoke", "--output", "json-summary"])
 
     assert result.exit_code == 1
     assert json.loads(result.stdout) == {

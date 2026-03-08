@@ -13,8 +13,14 @@ from agentflow.doctor import build_local_smoke_doctor_report
 app = typer.Typer(add_completion=False)
 
 
+class StructuredOutputFormat(StrEnum):
+    JSON = "json"
+    SUMMARY = "summary"
+
+
 class RunOutputFormat(StrEnum):
     JSON = "json"
+    JSON_SUMMARY = "json-summary"
     SUMMARY = "summary"
 
 
@@ -77,6 +83,14 @@ def _format_duration(started_at: str | None, finished_at: str | None) -> str | N
         return f"{duration_seconds:.0f}s"
     minutes, seconds = divmod(int(duration_seconds), 60)
     return f"{minutes}m {seconds}s"
+
+
+def _duration_seconds(started_at: str | None, finished_at: str | None) -> float | None:
+    started = _parse_iso8601(started_at)
+    finished = _parse_iso8601(finished_at)
+    if started is None or finished is None:
+        return None
+    return max((finished - started).total_seconds(), 0.0)
 
 
 def _preview_text(text: str | None, *, limit: int = 100) -> str | None:
@@ -176,6 +190,9 @@ def _build_run_summary(record: object, run_dir: Path | str | None = None) -> dic
     duration = _format_duration(started_at, finished_at)
     if duration is not None:
         summary["duration"] = duration
+    duration_seconds = _duration_seconds(started_at, finished_at)
+    if duration_seconds is not None:
+        summary["duration_seconds"] = duration_seconds
     if run_dir is not None:
         summary["run_dir"] = str(run_dir)
 
@@ -261,6 +278,9 @@ def _echo_run_result(record: object, *, output: RunOutputFormat, run_dir: Path |
     if output == RunOutputFormat.SUMMARY:
         typer.echo(_render_run_summary(record, run_dir=run_dir))
         return
+    if output == RunOutputFormat.JSON_SUMMARY:
+        typer.echo(json.dumps(_build_run_summary(record, run_dir=run_dir), indent=2))
+        return
     typer.echo(json.dumps(record.model_dump(mode="json"), indent=2))
 
 
@@ -283,6 +303,12 @@ def _run_pipeline_path(path: str, runs_dir: str, max_concurrent_runs: int, outpu
 
 def _doctor_report():
     return build_local_smoke_doctor_report()
+
+
+def _structured_output_from_run_output(output: RunOutputFormat) -> StructuredOutputFormat:
+    if output == RunOutputFormat.SUMMARY:
+        return StructuredOutputFormat.SUMMARY
+    return StructuredOutputFormat.JSON
 
 
 def _node_uses_kimi_smoke_bootstrap(node: object) -> bool:
@@ -340,11 +366,12 @@ def _load_pipeline_with_optional_smoke_preflight(
 
     if should_run_preflight:
         report = _doctor_report()
+        doctor_output = _structured_output_from_run_output(output)
         if report.status == "failed":
-            _echo_doctor_report(report, output=output)
+            _echo_doctor_report(report, output=doctor_output)
             raise typer.Exit(code=1)
         if report.status == "warning":
-            _echo_doctor_report(report, output=output, err=True)
+            _echo_doctor_report(report, output=doctor_output, err=True)
 
     return pipeline if pipeline is not None else _load_pipeline(selected_path)
 
@@ -359,15 +386,20 @@ def _render_doctor_summary(report: object) -> str:
     return "\n".join(lines)
 
 
-def _echo_doctor_report(report: object, *, output: RunOutputFormat = RunOutputFormat.JSON, err: bool = False) -> None:
-    if output == RunOutputFormat.SUMMARY:
+def _echo_doctor_report(
+    report: object,
+    *,
+    output: StructuredOutputFormat = StructuredOutputFormat.JSON,
+    err: bool = False,
+) -> None:
+    if output == StructuredOutputFormat.SUMMARY:
         typer.echo(_render_doctor_summary(report), err=err)
         return
     typer.echo(json.dumps(report.as_dict(), indent=2), err=err)
 
 
-def _echo_inspection(report: dict[str, object], *, output: RunOutputFormat) -> None:
-    if output == RunOutputFormat.SUMMARY:
+def _echo_inspection(report: dict[str, object], *, output: StructuredOutputFormat) -> None:
+    if output == StructuredOutputFormat.SUMMARY:
         from agentflow.inspection import render_launch_inspection_summary
 
         typer.echo(render_launch_inspection_summary(report))
@@ -397,7 +429,7 @@ def inspect(
     path: str,
     node: list[str] = typer.Option(None, "--node", "-n", help="Inspect only the selected node ids."),
     runs_dir: str = typer.Option(".agentflow/runs", envvar="AGENTFLOW_RUNS_DIR"),
-    output: RunOutputFormat = typer.Option(RunOutputFormat.SUMMARY, "--output", help="Result output format."),
+    output: StructuredOutputFormat = typer.Option(StructuredOutputFormat.SUMMARY, "--output", help="Result output format."),
 ) -> None:
     from agentflow.inspection import build_launch_inspection
 
@@ -444,7 +476,7 @@ def smoke(
 
 @app.command()
 def doctor(
-    output: RunOutputFormat = typer.Option(RunOutputFormat.JSON, "--output", help="Result output format."),
+    output: StructuredOutputFormat = typer.Option(StructuredOutputFormat.JSON, "--output", help="Result output format."),
 ) -> None:
     report = _doctor_report()
     _echo_doctor_report(report, output=output)
