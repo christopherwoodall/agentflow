@@ -5,10 +5,12 @@ from pathlib import Path
 import pytest
 
 from agentflow.local_shell import (
+    kimi_shell_init_requires_bash_warning,
     kimi_shell_init_requires_interactive_bash_warning,
     shell_init_exports_env_var,
-    shell_template_exports_env_var_before_command,
     shell_command_uses_kimi_helper,
+    shell_template_exports_env_var_before_command,
+    shell_wrapper_requires_command_placeholder,
     target_uses_interactive_bash,
 )
 
@@ -48,6 +50,20 @@ def test_shell_command_uses_kimi_helper_detects_actual_bootstrap_after_probe(com
     assert shell_command_uses_kimi_helper(command) is True
 
 
+@pytest.mark.parametrize(
+    ("shell", "expected"),
+    [
+        ("bash -lc 'echo pre'", True),
+        ("env BASH_ENV=/tmp/shell.env bash -lc 'echo pre'", True),
+        ("bash -lic", False),
+        ("env BASH_ENV=/tmp/shell.env bash -c", False),
+        ("bash -lc 'echo pre && {command}'", False),
+    ],
+)
+def test_shell_wrapper_requires_command_placeholder_detects_inline_command_payload(shell: str, expected: bool):
+    assert shell_wrapper_requires_command_placeholder(shell) is expected
+
+
 def test_kimi_shell_init_requires_interactive_bash_warning_ignores_probe_only_shell():
     target = {
         "kind": "local",
@@ -55,6 +71,33 @@ def test_kimi_shell_init_requires_interactive_bash_warning_ignores_probe_only_sh
     }
 
     assert kimi_shell_init_requires_interactive_bash_warning(target) is None
+
+
+def test_kimi_shell_init_requires_bash_warning_for_non_bash_shell_init():
+    target = {
+        "kind": "local",
+        "shell": "sh",
+        "shell_init": "kimi",
+    }
+
+    assert kimi_shell_init_requires_bash_warning(target) == (
+        "`shell_init: kimi` requires bash-style shell bootstrap, but `target.shell` resolves to `sh`. "
+        "Use `shell: bash` with `target.shell_login: true` and `target.shell_interactive: true`, "
+        "use `bash -lic`, or export provider variables directly."
+    )
+
+
+def test_kimi_shell_init_requires_bash_warning_for_non_bash_shell_wrapper():
+    target = {
+        "kind": "local",
+        "shell": "sh -c 'kimi && {command}'",
+    }
+
+    assert kimi_shell_init_requires_bash_warning(target) == (
+        "`target.shell` runs `kimi` through `sh` instead of bash, so shared helpers from bash startup "
+        "files will usually not load. Use `bash -lic`, set `shell: bash` plus login and interactive startup, "
+        "or export provider variables directly."
+    )
 
 
 def test_kimi_shell_init_requires_interactive_bash_warning_supports_shell_init_lists():

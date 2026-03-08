@@ -5,7 +5,7 @@ import os
 import shlex
 from contextlib import suppress
 
-from agentflow.local_shell import render_shell_init, target_uses_interactive_bash
+from agentflow.local_shell import render_shell_init, shell_wrapper_requires_command_placeholder, target_uses_interactive_bash
 from agentflow.prepared import ExecutionPaths, PreparedExecution
 from agentflow.runners.base import LaunchPlan, RawExecutionResult, Runner, StreamCallback
 from agentflow.specs import LocalTarget, NodeSpec
@@ -15,6 +15,10 @@ class LocalRunner(Runner):
     _INTERACTIVE_SHELL_STDERR_NOISE = (
         "bash: cannot set terminal process group (",
         "bash: no job control in this shell",
+    )
+    _SHELL_COMMAND_PLACEHOLDER_MESSAGE = (
+        "`target.shell` already includes a shell command payload. Add `{command}` where AgentFlow should inject "
+        "the prepared agent command."
     )
 
     def _has_flag(self, shell_parts: list[str], short_flag: str, long_flag: str | None = None) -> bool:
@@ -47,6 +51,8 @@ class LocalRunner(Runner):
         target = node.target
         if not isinstance(target, LocalTarget) or not target.shell:
             return prepared.command, {}
+        if shell_wrapper_requires_command_placeholder(target.shell):
+            raise ValueError(self._SHELL_COMMAND_PLACEHOLDER_MESSAGE)
 
         command_text = shlex.join(prepared.command)
         shell_command = 'eval "$AGENTFLOW_TARGET_COMMAND"'

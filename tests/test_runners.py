@@ -8,7 +8,7 @@ from agentflow.prepared import ExecutionPaths, PreparedExecution
 from agentflow.runners.aws_lambda import AwsLambdaRunner
 from agentflow.runners.container import ContainerRunner
 from agentflow.runners.local import LocalRunner
-from agentflow.specs import NodeSpec
+from agentflow.specs import LocalTarget, NodeSpec
 
 
 def _paths(tmp_path: Path) -> ExecutionPaths:
@@ -263,6 +263,27 @@ async def test_local_runner_shell_init_failure_stops_wrapped_command(tmp_path: P
     assert result.exit_code != 0
     assert result.stdout_lines == []
     assert result.stderr_lines == ["bash: line 1: missing_helper: command not found"]
+
+
+def test_local_runner_rejects_inline_shell_command_payload_without_placeholder(tmp_path: Path):
+    node = NodeSpec.model_validate(
+        {
+            "id": "inline-command-payload",
+            "agent": "codex",
+            "prompt": "hi",
+            "target": {"kind": "local", "shell": "bash"},
+        }
+    )
+    node.target = LocalTarget.model_construct(kind="local", shell="bash -lc 'echo pre'")
+    prepared = PreparedExecution(
+        command=["python3", "-c", 'print("wrapped", end="")'],
+        env={},
+        cwd=str(tmp_path),
+        trace_kind="codex",
+    )
+
+    with pytest.raises(ValueError, match=r"shell command payload.*\{command\}"):
+        LocalRunner().plan_execution(node, prepared, _paths(tmp_path))
 
 
 @pytest.mark.asyncio

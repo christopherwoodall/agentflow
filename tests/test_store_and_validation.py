@@ -123,6 +123,31 @@ def test_pipeline_validation_accepts_supported_bash_long_options_with_separate_v
     assert pipeline.nodes[0].target.shell == "bash --rcfile $HOME/.bashrc -ic 'kimi && {command}'"
 
 
+@pytest.mark.parametrize(
+    "shell",
+    [
+        "bash -lc 'echo pre'",
+        "env BASH_ENV=/tmp/shell.env bash -lc 'echo pre'",
+    ],
+)
+def test_pipeline_validation_rejects_shell_command_payload_without_command_placeholder(shell):
+    with pytest.raises(ValueError, match=r"shell command payload.*\{command\}"):
+        PipelineSpec.model_validate(
+            {
+                "name": "invalid-shell-command-payload",
+                "working_dir": ".",
+                "nodes": [
+                    {
+                        "id": "plan",
+                        "agent": "claude",
+                        "prompt": "plan",
+                        "target": {"kind": "local", "shell": shell},
+                    },
+                ],
+            }
+        )
+
+
 def test_pipeline_validation_accepts_shell_init_command_lists():
     pipeline = PipelineSpec.model_validate(
         {

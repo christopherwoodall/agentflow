@@ -89,6 +89,20 @@ def render_shell_init(shell_init: Any) -> str | None:
     return " && ".join(commands)
 
 
+def shell_wrapper_requires_command_placeholder(shell: str | None) -> bool:
+    if not isinstance(shell, str) or not shell.strip() or "{command}" in shell:
+        return False
+
+    parts = _split_shell_parts(shell)
+    if not parts:
+        return False
+
+    for index, part in enumerate(parts[1:], start=1):
+        if _is_command_flag(part):
+            return index + 1 < len(parts)
+    return False
+
+
 def shell_init_uses_kimi_helper(shell_init: Any) -> bool:
     return any(shell_command_uses_kimi_helper(command) for command in shell_init_commands(shell_init))
 
@@ -485,6 +499,39 @@ def _kimi_bootstrap_without_interactive_bash_warning(source: str) -> str:
         "`target.shell` uses `kimi` with bash without interactive startup; helpers from `~/.bashrc` are usually "
         "unavailable. Add `-i`, set `target.shell_interactive: true`, or use `bash -lic`."
     )
+
+
+def _shell_program(target: Any) -> str | None:
+    shell = _target_value(target, "shell")
+    shell_parts = _split_shell_parts(shell if isinstance(shell, str) else None)
+    if not shell_parts:
+        return None
+    return os.path.basename(shell_parts[0]) or None
+
+
+def kimi_shell_init_requires_bash_warning(target: Any) -> str | None:
+    if target_uses_bash(target):
+        return None
+
+    target_shell = _shell_program(target) or "this shell"
+    shell_init = _target_value(target, "shell_init")
+    shell = _target_value(target, "shell")
+
+    if shell_init_uses_kimi_helper(shell_init):
+        return (
+            f"`shell_init: kimi` requires bash-style shell bootstrap, but `target.shell` resolves to `{target_shell}`. "
+            "Use `shell: bash` with `target.shell_login: true` and `target.shell_interactive: true`, "
+            "use `bash -lic`, or export provider variables directly."
+        )
+
+    if shell_command_uses_kimi_helper(shell if isinstance(shell, str) else None):
+        return (
+            f"`target.shell` runs `kimi` through `{target_shell}` instead of bash, so shared helpers from bash startup "
+            "files will usually not load. Use `bash -lic`, set `shell: bash` plus login and interactive startup, "
+            "or export provider variables directly."
+        )
+
+    return None
 
 
 def kimi_shell_init_requires_interactive_bash_warning(target: Any, *, home: Path | None = None) -> str | None:

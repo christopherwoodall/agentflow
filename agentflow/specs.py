@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from agentflow.local_shell import invalid_bash_long_option_error
+from agentflow.local_shell import invalid_bash_long_option_error, shell_wrapper_requires_command_placeholder
 
 
 class AgentKind(StrEnum):
@@ -141,6 +141,11 @@ class MCPServerSpec(BaseModel):
 class LocalTarget(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    _SHELL_COMMAND_PLACEHOLDER_MESSAGE = (
+        "`target.shell` already includes a shell command payload. Add `{command}` where AgentFlow should "
+        "inject the prepared agent command."
+    )
+
     kind: Literal["local"] = "local"
     cwd: str | None = None
     shell: str | None = None
@@ -172,6 +177,8 @@ class LocalTarget(BaseModel):
             invalid_option_error = invalid_bash_long_option_error(self.shell)
             if invalid_option_error is not None:
                 raise ValueError(f"`target.shell` uses an unsupported bash long option. {invalid_option_error}")
+            if shell_wrapper_requires_command_placeholder(self.shell):
+                raise ValueError(self._SHELL_COMMAND_PLACEHOLDER_MESSAGE)
             return self
 
         missing_shell_fields: list[str] = []
