@@ -2600,6 +2600,50 @@ def test_doctor_with_pipeline_path_fails_when_local_codex_auth_is_unavailable(mo
     )
 
 
+def test_doctor_with_pipeline_path_accepts_local_codex_login_status_from_shell_bootstrap(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr=""),
+    )
+    fake_pipeline = SimpleNamespace(
+        nodes=[
+            SimpleNamespace(
+                id="codex_plan",
+                agent=SimpleNamespace(value="codex"),
+                provider=None,
+                env={},
+                executable=None,
+                target=SimpleNamespace(
+                    kind="local",
+                    shell="bash",
+                    shell_login=True,
+                    shell_interactive=True,
+                    shell_init="kimi",
+                    cwd=None,
+                ),
+            )
+        ],
+        working_path=Path.cwd(),
+    )
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", _capture_pipeline_loader(captured, fake_pipeline))
+
+    result = runner.invoke(app, ["doctor", "custom-smoke.yaml", "--output", "summary"])
+
+    assert result.exit_code == 0
+    assert captured["loaded_path"] == "custom-smoke.yaml"
+    assert result.stdout == (
+        "Doctor: ok\n"
+        "- kimi_shell_helper: ok - ready\n"
+        "Pipeline auto preflight: enabled - local Codex/Claude/Kimi nodes use a `kimi` shell bootstrap.\n"
+        "Pipeline auto preflight matches: codex_plan (codex) via `target.shell_init`\n"
+    )
+
+
 def test_doctor_with_pipeline_path_accepts_provider_credentials_from_shell_init_export(monkeypatch):
     captured: dict[str, object] = {}
 
