@@ -1125,6 +1125,35 @@ nodes:
     assert "Provider: kimi, key=ANTHROPIC_API_KEY, url=https://api.kimi.com/coding/" in result.stdout
 
 
+def test_inspect_command_prefers_node_env_auth_source_over_provider_env(tmp_path, monkeypatch):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-node-env-auth
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    prompt: hi
+    env:
+      ANTHROPIC_API_KEY: node-secret
+    provider:
+      name: kimi-proxy
+      base_url: https://example.test/anthropic
+      api_key_env: ANTHROPIC_API_KEY
+      env:
+        ANTHROPIC_API_KEY: provider-secret
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["nodes"][0]["auth"] == "`ANTHROPIC_API_KEY` via `node.env`"
+
+
 def test_inspect_command_surfaces_skills_and_mcp_names(tmp_path):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(

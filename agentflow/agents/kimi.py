@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from agentflow.agents.base import AgentAdapter
+from agentflow.env import merge_env_layers
 from agentflow.prepared import ExecutionPaths, PreparedExecution
 from agentflow.specs import NodeSpec
 
@@ -33,9 +34,7 @@ class KimiAdapter(AgentAdapter):
             str(Path(paths.target_runtime_dir) / relative_path),
         ]
         command.extend(node.extra_args)
-        env = dict(node.env)
-        if provider:
-            env.update(provider.env)
+        env = merge_env_layers(getattr(provider, "env", None), node.env)
         return PreparedExecution(
             command=command,
             env=env,

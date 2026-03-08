@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from agentflow.agents.base import AgentAdapter
+from agentflow.env import merge_env_layers
 from agentflow.prepared import ExecutionPaths, PreparedExecution
 from agentflow.specs import NodeSpec, ToolAccess
 
@@ -72,9 +73,8 @@ class ClaudeAdapter(AgentAdapter):
             relative_path = self.relative_runtime_file("claude-mcp.json")
             runtime_files[relative_path] = json.dumps(mcp_payload, ensure_ascii=False, indent=2)
             command.extend(["--mcp-config", str(Path(paths.target_runtime_dir) / relative_path)])
-        env = dict(node.env)
+        env = merge_env_layers(getattr(provider, "env", None), node.env)
         if provider:
-            env.update(provider.env)
             if provider.base_url:
                 env.setdefault("ANTHROPIC_BASE_URL", provider.base_url)
             if provider.headers:

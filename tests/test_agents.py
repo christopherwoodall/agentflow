@@ -165,3 +165,70 @@ def test_kimi_adapter_uses_current_python_by_default(tmp_path):
 
     assert prepared.command[0] == sys.executable
     assert prepared.command[1:3] == ["-m", "agentflow.remote.kimi_bridge"]
+
+
+def test_claude_adapter_prefers_node_env_over_provider_env(tmp_path):
+    node = NodeSpec.model_validate(
+        {
+            "id": "review",
+            "agent": "claude",
+            "prompt": "Review",
+            "env": {"SHARED_FLAG": "node", "ANTHROPIC_API_KEY": "node-secret"},
+            "provider": {
+                "name": "kimi-proxy",
+                "base_url": "https://example.test/anthropic",
+                "api_key_env": "ANTHROPIC_API_KEY",
+                "env": {"SHARED_FLAG": "provider", "ANTHROPIC_API_KEY": "provider-secret"},
+            },
+        }
+    )
+
+    prepared = ClaudeAdapter().prepare(node, "Review", _paths(tmp_path))
+
+    assert prepared.env["SHARED_FLAG"] == "node"
+    assert prepared.env["ANTHROPIC_API_KEY"] == "node-secret"
+
+
+def test_codex_adapter_prefers_node_env_over_provider_env(tmp_path):
+    node = NodeSpec.model_validate(
+        {
+            "id": "plan",
+            "agent": "codex",
+            "prompt": "Plan",
+            "env": {"SHARED_FLAG": "node", "OPENAI_API_KEY": "node-secret"},
+            "provider": {
+                "name": "openai-proxy",
+                "base_url": "https://example.test/openai",
+                "api_key_env": "OPENAI_API_KEY",
+                "wire_api": "responses",
+                "env": {"SHARED_FLAG": "provider", "OPENAI_API_KEY": "provider-secret"},
+            },
+        }
+    )
+
+    prepared = CodexAdapter().prepare(node, "Plan", _paths(tmp_path))
+
+    assert prepared.env["SHARED_FLAG"] == "node"
+    assert prepared.env["OPENAI_API_KEY"] == "node-secret"
+
+
+def test_kimi_adapter_prefers_node_env_over_provider_env(tmp_path):
+    node = NodeSpec.model_validate(
+        {
+            "id": "review",
+            "agent": "kimi",
+            "prompt": "Review",
+            "env": {"SHARED_FLAG": "node", "KIMI_API_KEY": "node-secret"},
+            "provider": {
+                "name": "moonshot-proxy",
+                "base_url": "https://example.test/moonshot",
+                "api_key_env": "KIMI_API_KEY",
+                "env": {"SHARED_FLAG": "provider", "KIMI_API_KEY": "provider-secret"},
+            },
+        }
+    )
+
+    prepared = KimiAdapter().prepare(node, "Review", _paths(tmp_path))
+
+    assert prepared.env["SHARED_FLAG"] == "node"
+    assert prepared.env["KIMI_API_KEY"] == "node-secret"

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agentflow.agents.base import AgentAdapter
+from agentflow.env import merge_env_layers
 from agentflow.prepared import ExecutionPaths, PreparedExecution
 from agentflow.specs import NodeSpec, ProviderConfig, ToolAccess
 
@@ -86,13 +87,11 @@ class CodexAdapter(AgentAdapter):
         command.extend(node.extra_args)
         command.append(prompt)
 
-        env = dict(node.env)
+        env = merge_env_layers(getattr(provider, "env", None), node.env)
         runtime_files: dict[str, str] = {}
         if provider or node.mcps or node.model:
             runtime_files[self.relative_runtime_file("codex_home", "config.toml")] = self._render_config(node, provider)
             env["CODEX_HOME"] = str(Path(paths.target_runtime_dir) / "codex_home")
-        if provider:
-            env.update(provider.env)
         return PreparedExecution(
             command=command,
             env=env,

@@ -200,12 +200,12 @@ def _auth_summary(node: NodeSpec, resolved_provider: object) -> str | None:
             if shell_command_uses_kimi_helper(shell if isinstance(shell, str) else None):
                 return "`ANTHROPIC_API_KEY` via `target.shell` (`kimi` helper)"
 
+    if _has_nonempty_env_value(node.env, api_key_env):
+        return f"`{api_key_env}` via `node.env`"
+
     provider_env = getattr(resolved_provider, "env", None)
     if _has_nonempty_env_value(provider_env, api_key_env):
         return f"`{api_key_env}` via `provider.env`"
-
-    if _has_nonempty_env_value(node.env, api_key_env):
-        return f"`{api_key_env}` via `node.env`"
 
     if str(os.getenv(api_key_env, "")).strip():
         return f"`{api_key_env}` via current environment"
