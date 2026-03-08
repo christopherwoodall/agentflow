@@ -979,6 +979,34 @@ def smoke(
     _run_pipeline(pipeline, runs_dir, max_concurrent_runs, output)
 
 
+@app.command("check-local")
+def check_local(
+    path: str | None = typer.Argument(None, help="Optional pipeline path. Defaults to the bundled real-agent smoke example."),
+    runs_dir: str = typer.Option(".agentflow/runs", envvar="AGENTFLOW_RUNS_DIR"),
+    max_concurrent_runs: int = typer.Option(2, envvar="AGENTFLOW_MAX_CONCURRENT_RUNS"),
+    output: RunOutputFormat = typer.Option(RunOutputFormat.SUMMARY, "--output", help="Result output format."),
+    shell_bridge: bool = typer.Option(
+        False,
+        "--shell-bridge",
+        help="Include a ready-to-paste bash login bridge suggestion when local shell startup needs one.",
+    ),
+) -> None:
+    selected_path = path or default_smoke_pipeline_path()
+    report, pipeline = _doctor_report_for_path(selected_path)
+    recommendation = build_bash_login_shell_bridge_recommendation() if shell_bridge else None
+    _echo_doctor_report(
+        report,
+        output=StructuredOutputFormat.SUMMARY,
+        err=True,
+        include_shell_bridge=shell_bridge,
+        shell_bridge=recommendation,
+        pipeline=pipeline,
+    )
+    if report.status == "failed":
+        raise typer.Exit(code=1)
+    _run_pipeline(_load_pipeline(selected_path), runs_dir, max_concurrent_runs, output)
+
+
 @app.command()
 def doctor(
     path: str | None = typer.Argument(

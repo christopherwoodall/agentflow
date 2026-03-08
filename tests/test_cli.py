@@ -104,6 +104,7 @@ def test_python_module_entrypoint_displays_help():
     assert completed.returncode == 0, completed.stderr
     assert "Usage:" in completed.stdout
     assert "validate" in completed.stdout
+    assert "check-local" in completed.stdout
     assert "smoke" in completed.stdout
 
 
@@ -2586,6 +2587,78 @@ def test_smoke_uses_bundled_pipeline_by_default(monkeypatch):
     assert captured["submitted_pipeline"] is fake_pipeline
     assert captured["wait_run_id"] == "smoke-123"
     assert captured["wait_timeout"] is None
+
+
+def test_check_local_uses_bundled_pipeline_by_default(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("AGENTFLOW_RUNS_DIR", "/tmp/agentflow-check-local-runs")
+    monkeypatch.setenv("AGENTFLOW_MAX_CONCURRENT_RUNS", "4")
+
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            captured["submitted_pipeline"] = pipeline
+            return SimpleNamespace(id="check-local-123")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            captured["wait_run_id"] = run_id
+            captured["wait_timeout"] = timeout
+            return _completed_run(run_id, pipeline_name="local-real-agents-kimi-smoke")
+
+    def fake_build_runtime(runs_dir: str, max_concurrent_runs: int):
+        captured["runs_dir"] = runs_dir
+        captured["max_concurrent_runs"] = max_concurrent_runs
+        return object(), FakeOrchestrator()
+
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (
+            SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id),
+            fake_build_runtime(runs_dir, max_concurrent_runs)[1],
+        ),
+    )
+
+    bundled_path = str((Path.cwd() / "examples/local-real-agents-kimi-smoke.yaml").resolve())
+    fake_pipeline = object()
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: bundled_path)
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", _capture_pipeline_loader(captured, fake_pipeline))
+
+    result = runner.invoke(app, ["check-local"])
+
+    assert result.exit_code == 0
+    assert result.stderr == (
+        "Doctor: ok\n"
+        "- kimi_shell_helper: ok - ready\n"
+        "Pipeline auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
+    )
+    assert "Run check-local-123: completed" in result.stdout
+    assert captured["loaded_path"] == bundled_path
+    assert captured["runs_dir"] == "/tmp/agentflow-check-local-runs"
+    assert captured["max_concurrent_runs"] == 4
+    assert captured["submitted_pipeline"] is fake_pipeline
+    assert captured["wait_run_id"] == "check-local-123"
+    assert captured["wait_timeout"] is None
+
+
+def test_check_local_stops_when_doctor_fails(monkeypatch):
+    bundled_path = str((Path.cwd() / "examples/local-real-agents-kimi-smoke.yaml").resolve())
+
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report(status="failed", detail="missing"))
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: bundled_path)
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", _capture_pipeline_loader({}, object()))
+    monkeypatch.setattr(agentflow.cli, "_build_runtime", lambda runs_dir, max_concurrent_runs: (_ for _ in ()).throw(AssertionError("runtime should not build")))
+
+    result = runner.invoke(app, ["check-local"])
+
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "Doctor: failed\n"
+        "- kimi_shell_helper: failed - missing\n"
+        "Pipeline auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
+    )
+    assert result.stdout == ""
 
 
 def test_smoke_runs_when_bundled_preflight_warns(monkeypatch):
