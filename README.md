@@ -156,7 +156,7 @@ target:
   shell_init: kimi
 ```
 
-This runs the node inside `bash`, explicitly enables login and interactive startup files, executes `kimi`, and then launches the prepared agent command. It is useful for helper functions defined in `~/.bashrc`. If your login shell uses `~/.bash_profile`, make sure it sources `~/.bashrc`; otherwise Bash reads `~/.profile` when no `~/.bash_profile` or `~/.bash_login` file is present.
+This runs the node inside `bash`, explicitly enables login and interactive startup files, executes `kimi`, and then launches the prepared agent command. It is useful for helper functions defined in `~/.bashrc`. If your login shell uses `~/.bash_profile`, make sure it eventually reaches `~/.bashrc`, either directly or via another startup file such as `~/.profile`; otherwise Bash only reads `~/.profile` when no `~/.bash_profile` or `~/.bash_login` file is present.
 
 `shell_init` is treated as a bootstrap prerequisite: if it exits non-zero, AgentFlow does not launch the wrapped agent command. This helps smoke runs fail fast when helper functions such as `kimi` are missing.
 
@@ -242,7 +242,7 @@ Run a real local smoke check with your installed CLIs:
 agentflow smoke
 ```
 
-This keeps the check small while exercising both local `codex` and local `claude` end-to-end. Before the bundled smoke pipeline starts, AgentFlow runs a local preflight that verifies `codex`, `claude`, and the `kimi` shell helper are all available, and it reports which bash login startup file is active if the preflight fails.
+This keeps the check small while exercising both local `codex` and local `claude` end-to-end. Before the bundled smoke pipeline starts, AgentFlow runs a local preflight that verifies `codex`, `claude`, and the `kimi` shell helper are all available, and it reports which bash login startup file is active, including transitive bridges such as `~/.bash_profile` -> `~/.profile` -> `~/.bashrc`.
 
 You can run the same preflight directly:
 
