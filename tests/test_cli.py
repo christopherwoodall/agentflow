@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from types import SimpleNamespace
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -94,8 +97,8 @@ def test_serve_uses_runtime_env_vars(monkeypatch):
         return object(), object()
 
     monkeypatch.setattr(agentflow.cli, "_build_runtime", fake_build_runtime)
-    monkeypatch.setattr(agentflow.cli, "create_app", lambda store, orchestrator: "fake-app")
-    monkeypatch.setattr(agentflow.cli.uvicorn, "run", lambda app, host, port: captured.update({"app": app, "host": host, "port": port}))
+    monkeypatch.setattr(agentflow.cli, "_create_web_app", lambda store, orchestrator: "fake-app")
+    monkeypatch.setattr(agentflow.cli, "_serve_web_app", lambda app, host, port: captured.update({"app": app, "host": host, "port": port}))
 
     result = runner.invoke(app, ["serve"])
 
@@ -135,7 +138,7 @@ def test_run_uses_runtime_env_vars(monkeypatch):
 
     fake_pipeline = object()
     monkeypatch.setattr(agentflow.cli, "_build_runtime", fake_build_runtime)
-    monkeypatch.setattr(agentflow.cli, "load_pipeline_from_path", lambda path: fake_pipeline)
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: fake_pipeline)
 
     result = runner.invoke(app, ["run", "pipeline.yaml"])
 
@@ -176,7 +179,7 @@ def test_smoke_uses_bundled_pipeline_by_default(monkeypatch):
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
     monkeypatch.setattr(agentflow.cli, "_build_runtime", fake_build_runtime)
     monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
-    monkeypatch.setattr(agentflow.cli, "load_pipeline_from_path", _capture_pipeline_loader(captured, fake_pipeline))
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", _capture_pipeline_loader(captured, fake_pipeline))
 
     result = runner.invoke(app, ["smoke"])
 
@@ -209,7 +212,7 @@ def test_smoke_accepts_explicit_pipeline_path(monkeypatch):
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: (_ for _ in ()).throw(AssertionError("doctor should not run")))
     monkeypatch.setattr(agentflow.cli, "_build_runtime", lambda runs_dir, max_concurrent_runs: (object(), FakeOrchestrator()))
     fake_pipeline = object()
-    monkeypatch.setattr(agentflow.cli, "load_pipeline_from_path", _capture_pipeline_loader(captured, fake_pipeline))
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", _capture_pipeline_loader(captured, fake_pipeline))
 
     result = runner.invoke(app, ["smoke", "custom-smoke.yaml"])
 
@@ -233,10 +236,55 @@ def test_doctor_outputs_json_report(monkeypatch):
     }
 
 
+def test_doctor_command_does_not_import_web_stack(monkeypatch):
+    repo_root = Path(__file__).resolve().parents[1]
+    script = """
+import builtins
+import importlib
+import json
+
+from typer.testing import CliRunner
+from agentflow.doctor import DoctorCheck, DoctorReport
+
+original_import = builtins.__import__
+
+def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name in {\"agentflow.app\", \"fastapi\"}:
+        raise ModuleNotFoundError(name)
+    return original_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = fake_import
+cli_module = importlib.import_module(\"agentflow.cli\")
+cli_module.build_local_smoke_doctor_report = lambda: DoctorReport(
+    status=\"ok\",
+    checks=[DoctorCheck(name=\"kimi_shell_helper\", status=\"ok\", detail=\"ready\")],
+)
+result = CliRunner().invoke(cli_module.app, [\"doctor\"])
+print(json.dumps({\"exit_code\": result.exit_code, \"stdout\": result.stdout}))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        check=False,
+        cwd=repo_root,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    assert payload == {
+        "exit_code": 0,
+        "stdout": json.dumps({
+        "status": "ok",
+        "checks": [{"name": "kimi_shell_helper", "status": "ok", "detail": "ready"}],
+    }, indent=2) + "\n",
+    }
+
+
 def test_smoke_stops_when_bundled_preflight_fails(monkeypatch):
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report(status="failed", detail="missing"))
     monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
-    monkeypatch.setattr(agentflow.cli, "load_pipeline_from_path", lambda path: (_ for _ in ()).throw(AssertionError("pipeline should not load")))
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: (_ for _ in ()).throw(AssertionError("pipeline should not load")))
 
     result = runner.invoke(app, ["smoke"])
 
