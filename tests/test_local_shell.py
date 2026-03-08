@@ -142,6 +142,32 @@ def test_kimi_shell_init_requires_interactive_bash_warning_accepts_bash_env_boot
     assert kimi_shell_init_requires_interactive_bash_warning(target) is None
 
 
+def test_kimi_shell_init_requires_interactive_bash_warning_uses_home_prefix_for_bash_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fallback_home = tmp_path / "fallback-home"
+    fallback_home.mkdir()
+    (fallback_home / ".bashrc").write_text(
+        "case $- in\n    *i*) ;;\n      *) return;;\nesac\n\nkimi(){ :; }\n",
+        encoding="utf-8",
+    )
+
+    prefixed_home = tmp_path / "prefixed-home"
+    prefixed_home.mkdir()
+    (prefixed_home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+
+    monkeypatch.setattr("agentflow.local_shell.Path.home", lambda: fallback_home)
+
+    target = {
+        "kind": "local",
+        "shell": f"env HOME={prefixed_home} BASH_ENV=$HOME/.bashrc bash -c",
+        "shell_init": "kimi",
+    }
+
+    assert kimi_shell_init_requires_interactive_bash_warning(target) is None
+
+
 def test_kimi_shell_init_requires_interactive_bash_warning_accepts_bash_env_that_sources_helper_file(
     tmp_path: Path,
 ):
@@ -318,6 +344,31 @@ def test_kimi_shell_init_requires_interactive_bash_warning_accepts_explicit_bash
     }
 
     assert kimi_shell_init_requires_interactive_bash_warning(target, home=home) is None
+
+
+def test_kimi_shell_init_requires_interactive_bash_warning_uses_home_prefix_for_explicit_bashrc_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fallback_home = tmp_path / "fallback-home"
+    fallback_home.mkdir()
+    (fallback_home / ".bashrc").write_text(
+        "case $- in\n    *i*) ;;\n      *) return;;\nesac\n\nkimi(){ :; }\n",
+        encoding="utf-8",
+    )
+
+    prefixed_home = tmp_path / "prefixed-home"
+    prefixed_home.mkdir()
+    (prefixed_home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+
+    monkeypatch.setattr("agentflow.local_shell.Path.home", lambda: fallback_home)
+
+    target = {
+        "kind": "local",
+        "shell": f"env HOME={prefixed_home} bash -lc 'source ~/.bashrc && kimi && {{command}}'",
+    }
+
+    assert kimi_shell_init_requires_interactive_bash_warning(target) is None
 
 
 def test_kimi_shell_init_requires_interactive_bash_warning_accepts_wrapper_that_sources_profile_with_kimi(
