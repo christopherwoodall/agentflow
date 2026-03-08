@@ -48,6 +48,20 @@ def test_should_probe_local_claude_for_custom_kimi_provider_base_url():
     assert _should_probe_local_claude(node) is True
 
 
+def test_should_probe_local_claude_for_custom_kimi_provider_env_base_url():
+    node = SimpleNamespace(
+        agent=SimpleNamespace(value="claude"),
+        provider=ProviderConfig(
+            name="kimi-proxy",
+            api_key_env="ANTHROPIC_API_KEY",
+            env={"ANTHROPIC_BASE_URL": "https://api.kimi.com/coding/"},
+        ),
+        target=SimpleNamespace(kind="local", shell="bash", shell_login=True, shell_interactive=True, shell_init=None),
+    )
+
+    assert _should_probe_local_claude(node) is True
+
+
 def test_local_smoke_doctor_report_ok_with_profile_bridge(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
