@@ -34,6 +34,7 @@ _KIMI_BASE_URL_MISSING_EXIT_CODE = 15
 _KIMI_BASE_URL_MISMATCH_EXIT_CODE = 16
 _CODEX_LOGIN_STATUS_AFTER_KIMI_FAILED_EXIT_CODE = 17
 _CLAUDE_AFTER_KIMI_VERSION_FAILED_EXIT_CODE = 18
+_CODEX_AFTER_KIMI_VERSION_FAILED_EXIT_CODE = 19
 _EXPECTED_KIMI_ANTHROPIC_BASE_URL = "https://api.kimi.com/coding/"
 _REDACTED = "<redacted>"
 _BASH_INTERACTIVE_STDERR_NOISE = (
@@ -1068,6 +1069,7 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
             f"type {shlex.quote('claude')} >/dev/null 2>&1 || exit {_CLAUDE_IN_SHELL_MISSING_EXIT_CODE}",
             f"{shlex.quote('claude')} --version >/dev/null 2>&1 || exit {_CLAUDE_AFTER_KIMI_VERSION_FAILED_EXIT_CODE}",
             f"type {shlex.quote('codex')} >/dev/null 2>&1 || exit {_CODEX_AFTER_KIMI_MISSING_EXIT_CODE}",
+            f"{shlex.quote('codex')} --version >/dev/null 2>&1 || exit {_CODEX_AFTER_KIMI_VERSION_FAILED_EXIT_CODE}",
             (
                 "codex login status >/dev/null 2>&1 || [ -n \"${OPENAI_API_KEY:-}\" ] "
                 f"|| exit {_CODEX_LOGIN_STATUS_AFTER_KIMI_FAILED_EXIT_CODE}"
@@ -1130,6 +1132,15 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
             detail=(
                 "`kimi` runs in `bash -lic`, but `codex` is unavailable afterwards; "
                 "the bundled smoke pipeline will not be able to launch Codex inside that shared Kimi bootstrap."
+            ),
+        )
+    if result.returncode == _CODEX_AFTER_KIMI_VERSION_FAILED_EXIT_CODE:
+        return DoctorCheck(
+            name="kimi_shell_helper",
+            status="failed",
+            detail=(
+                "`kimi` runs in `bash -lic`, and `codex` is on PATH afterwards, but `codex --version` still "
+                "fails; the bundled smoke pipeline will not be able to launch Codex inside that shared Kimi bootstrap."
             ),
         )
     if result.returncode == _CODEX_LOGIN_STATUS_AFTER_KIMI_FAILED_EXIT_CODE:

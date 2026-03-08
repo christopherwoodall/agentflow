@@ -785,6 +785,28 @@ def test_local_smoke_doctor_report_fails_when_codex_is_missing_after_kimi_bootst
     }
 
 
+def test_local_smoke_doctor_report_fails_when_codex_cannot_launch_after_kimi_bootstrap(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+
+    monkeypatch.setattr("agentflow.doctor.shutil.which", lambda name: f"/tmp/{name}")
+    monkeypatch.setattr(
+        "agentflow.doctor.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args=args[0], returncode=19, stdout="", stderr="codex failed\n"),
+    )
+
+    report = build_local_smoke_doctor_report(home=home)
+
+    assert report.status == "failed"
+    assert report.as_dict()["checks"][-1] == {
+        "name": "kimi_shell_helper",
+        "status": "failed",
+        "detail": "`kimi` runs in `bash -lic`, and `codex` is on PATH afterwards, but `codex --version` still fails; the bundled smoke pipeline will not be able to launch Codex inside that shared Kimi bootstrap.",
+    }
+
+
 def test_local_smoke_doctor_report_fails_when_codex_is_not_logged_in_after_kimi_bootstrap(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
@@ -822,6 +844,7 @@ def test_local_smoke_doctor_report_accepts_openai_api_key_when_codex_login_statu
     def fake_run(*args, **kwargs):
         command = args[0]
         if command[:2] == ["bash", "-lic"]:
+            assert "codex --version >/dev/null 2>&1" in command[2]
             assert 'codex login status >/dev/null 2>&1 || [ -n "${OPENAI_API_KEY:-}" ]' in command[2]
         return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
 
