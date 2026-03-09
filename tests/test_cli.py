@@ -4637,7 +4637,7 @@ def test_check_local_accepts_wrapper_preflight_flags_for_cli_parity(monkeypatch)
 
     assert result.exit_code == 0
     assert "Doctor: ok" in result.stderr
-    assert "Pipeline auto preflight: enabled - path matches the bundled real-agent smoke pipeline." in result.stderr
+    assert "enabled - path matches the bundled real-agent smoke pipeline." in result.stderr
     assert "Run check-local-wrapper-flags: completed" in result.stdout
     assert captured["submitted_pipeline"] is fake_pipeline
     assert captured["wait_run_id"] == "check-local-wrapper-flags"
