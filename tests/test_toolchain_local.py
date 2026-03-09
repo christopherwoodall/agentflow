@@ -140,6 +140,52 @@ def test_build_local_kimi_toolchain_report_requires_kimi_to_export_anthropic_env
     )
 
 
+def test_build_local_kimi_toolchain_report_ignores_ambient_openai_base_url_for_codex_auth(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    _write_login_shell_home(home)
+    bin_dir = home / "bin"
+    bin_dir.mkdir()
+    (home / ".bashrc").write_text(
+        (home / ".bashrc").read_text(encoding="utf-8")
+        + textwrap.dedent(
+            """
+            kimi() {
+              export ANTHROPIC_API_KEY=test-kimi-key
+              export ANTHROPIC_BASE_URL=https://api.kimi.com/coding/
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _write_executable(
+        bin_dir / "codex",
+        'if [ "${1:-}" = "login" ] && [ "${2:-}" = "status" ]; then\n'
+        '  if [ -n "${OPENAI_BASE_URL:-}" ]; then\n'
+        "    exit 0\n"
+        "  fi\n"
+        "  exit 1\n"
+        "fi\n"
+        'printf "codex-cli 0.0.0\\n"\n',
+    )
+    _write_executable(bin_dir / "claude", 'printf "Claude Code 0.0.0\\n"\n')
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://relay.example/openai")
+
+    report = build_local_kimi_toolchain_report(home=home)
+
+    assert report.status == "failed"
+    assert report.anthropic_base_url == "https://api.kimi.com/coding/"
+    assert report.codex_auth is None
+    assert report.detail == (
+        "`kimi` runs in `bash -lic`, and `codex` is on PATH afterwards, but neither `codex login "
+        "status` succeeds nor `OPENAI_API_KEY` is exported; make sure Codex is logged in or "
+        "`OPENAI_API_KEY` is exported in that shared smoke shell."
+    )
+
+
 def test_toolchain_local_command_renders_summary_with_shell_bridge(monkeypatch) -> None:
     report = LocalToolchainReport(
         status="failed",
