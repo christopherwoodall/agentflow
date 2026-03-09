@@ -202,6 +202,30 @@ def _mock_local_readiness_info(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _bundled_kimi_smoke_pipeline(*, trigger: str = "target.bootstrap") -> SimpleNamespace:
+    target_kwargs = {"kind": "local"}
+    if trigger == "target.shell_init":
+        target_kwargs.update({"shell": "bash", "shell_login": True, "shell_interactive": True, "shell_init": "kimi"})
+    else:
+        target_kwargs["bootstrap"] = "kimi"
+
+    target = SimpleNamespace(**target_kwargs)
+    return SimpleNamespace(
+        nodes=[
+            SimpleNamespace(
+                id="codex_plan",
+                agent=SimpleNamespace(value="codex"),
+                target=target,
+            ),
+            SimpleNamespace(
+                id="claude_review",
+                agent=SimpleNamespace(value="claude"),
+                target=target,
+            ),
+        ]
+    )
+
+
 def _completed_run(
     run_id: str,
     *,
@@ -339,7 +363,7 @@ def test_render_doctor_summary_appends_bash_startup_summary_suffix():
 
 
 def test_doctor_command_json_preserves_bash_startup_context(monkeypatch):
-    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: SimpleNamespace(nodes=[]))
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: _bundled_kimi_smoke_pipeline())
     monkeypatch.setattr(agentflow.cli, "_pipeline_launch_inspection_nodes", lambda pipeline: [])
     monkeypatch.setattr(
         agentflow.cli,
@@ -374,6 +398,20 @@ def test_doctor_command_json_preserves_bash_startup_context(monkeypatch):
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["status"] == "ok"
+    assert payload["pipeline"] == {
+        "auto_preflight": {
+            "enabled": True,
+            "reason": "path matches the bundled real-agent smoke pipeline.",
+            "matches": [
+                {"node_id": "codex_plan", "agent": "codex", "trigger": "target.bootstrap"},
+                {"node_id": "claude_review", "agent": "claude", "trigger": "target.bootstrap"},
+            ],
+            "match_summary": [
+                "codex_plan (codex) via `target.bootstrap`",
+                "claude_review (claude) via `target.bootstrap`",
+            ],
+        }
+    }
     assert next(check for check in payload["checks"] if check["name"] == "bash_login_startup") == {
         "name": "bash_login_startup",
         "status": "ok",
@@ -4595,8 +4633,8 @@ def test_check_local_uses_bundled_pipeline_by_default(monkeypatch):
         "- claude_ready: ok - Node `claude_review` (claude) can launch local Claude after the node shell bootstrap; `claude --version` succeeds in the prepared local shell.\n"
         "- codex_ready: ok - Node `codex_plan` (codex) can launch local Codex after the node shell bootstrap; `codex --version` succeeds in the prepared local shell.\n"
         "- codex_auth: ok - Node `codex_plan` (codex) can authenticate local Codex after the node shell bootstrap via `codex login status` or `OPENAI_API_KEY`.\n"
-        "Pipeline auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
-        "Pipeline auto preflight matches: codex_plan (codex) via `target.shell_init`, claude_review (claude) via `target.shell_init`\n"
+        "Pipeline run/smoke auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
+        "Pipeline run/smoke auto preflight matches: codex_plan (codex) via `target.shell_init`, claude_review (claude) via `target.shell_init`\n"
     )
     assert "Run check-local-123: completed" in result.stdout
     assert captured["loaded_path"] == bundled_path
@@ -4637,7 +4675,7 @@ def test_check_local_accepts_wrapper_preflight_flags_for_cli_parity(monkeypatch)
 
     assert result.exit_code == 0
     assert "Doctor: ok" in result.stderr
-    assert "enabled - path matches the bundled real-agent smoke pipeline." in result.stderr
+    assert "Pipeline run/smoke auto preflight: enabled - path matches the bundled real-agent smoke pipeline." in result.stderr
     assert "Run check-local-wrapper-flags: completed" in result.stdout
     assert captured["submitted_pipeline"] is fake_pipeline
     assert captured["wait_run_id"] == "check-local-wrapper-flags"
@@ -4727,6 +4765,7 @@ def test_check_local_defaults_to_json_when_not_tty(monkeypatch):
         "status": "warning",
         "checks": [{"name": "bash_login_startup", "status": "warning", "detail": "missing bridge"}],
         "pipeline": {
+            "auto_preflight_scope": "run/smoke",
             "auto_preflight": {
                 "enabled": True,
                 "reason": "path matches the bundled real-agent smoke pipeline.",
@@ -4770,6 +4809,7 @@ def test_check_local_auto_uses_json_when_stdout_is_redirected_but_stderr_is_tty(
         "status": "warning",
         "checks": [{"name": "bash_login_startup", "status": "warning", "detail": "missing bridge"}],
         "pipeline": {
+            "auto_preflight_scope": "run/smoke",
             "auto_preflight": {
                 "enabled": True,
                 "reason": "path matches the bundled real-agent smoke pipeline.",
@@ -4810,7 +4850,7 @@ def test_check_local_defaults_to_summary_on_tty(monkeypatch):
         "- claude_ready: ok - Node `claude_review` (claude) can launch local Claude after the node shell bootstrap; `claude --version` succeeds in the prepared local shell.\n"
         "- codex_ready: ok - Node `codex_plan` (codex) can launch local Codex after the node shell bootstrap; `codex --version` succeeds in the prepared local shell.\n"
         "- codex_auth: ok - Node `codex_plan` (codex) can authenticate local Codex after the node shell bootstrap via `codex login status` or `OPENAI_API_KEY`.\n"
-        "Pipeline auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
+        "Pipeline run/smoke auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
     )
     assert "Run check-local-auto-summary: completed" in result.stdout
 
@@ -4847,12 +4887,13 @@ def test_check_local_uses_json_doctor_output_when_run_output_is_json(monkeypatch
         "status": "warning",
         "checks": [{"name": "bash_login_startup", "status": "warning", "detail": "missing bridge"}],
         "pipeline": {
+            "auto_preflight_scope": "run/smoke",
             "auto_preflight": {
                 "enabled": True,
                 "reason": "path matches the bundled real-agent smoke pipeline.",
                 "matches": [],
                 "match_summary": [],
-            }
+            },
         },
         "shell_bridge": _shell_bridge_recommendation().as_dict(),
     }
@@ -4935,6 +4976,7 @@ def test_check_local_uses_json_summary_doctor_output_when_run_output_is_json_sum
             {"name": "kimi_shell_helper", "status": "ok", "detail": "ready"},
         ],
         "pipeline": {
+            "auto_preflight_scope": "run/smoke",
             "auto_preflight": {
                 "enabled": True,
                 "reason": "path matches the bundled real-agent smoke pipeline.",
@@ -4982,7 +5024,7 @@ def test_check_local_stops_when_doctor_fails(monkeypatch):
     assert result.stderr == (
         "Doctor: failed\n"
         "- kimi_shell_helper: failed - missing\n"
-        "Pipeline auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
+        "Pipeline run/smoke auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
     )
     assert result.stdout == ""
 
@@ -5042,7 +5084,7 @@ def test_check_local_custom_non_kimi_pipeline_skips_bundled_smoke_prereqs(monkey
     assert result.exit_code == 0
     assert result.stderr == (
         "Doctor: ok\n"
-        "Pipeline auto preflight: disabled - path does not match the bundled smoke pipeline and no local Codex/Claude/Kimi node uses `kimi` bootstrap.\n"
+        "Pipeline run/smoke auto preflight: disabled - path does not match the bundled smoke pipeline and no local Codex/Claude/Kimi node uses `kimi` bootstrap.\n"
     )
     assert "Run check-local-custom: completed" in result.stdout
     assert captured["submitted_pipeline"] is fake_pipeline
@@ -5121,8 +5163,8 @@ def test_check_local_custom_kimi_pipeline_reports_successful_local_agent_probes(
         "- claude_ready: ok - Node `claude_review` (claude) can launch local Claude after the node shell bootstrap; `claude --version` succeeds in the prepared local shell.\n"
         "- codex_ready: ok - Node `codex_plan` (codex) can launch local Codex after the node shell bootstrap; `codex --version` succeeds in the prepared local shell.\n"
         "- codex_auth: ok - Node `codex_plan` (codex) can authenticate local Codex after the node shell bootstrap via `codex login status` or `OPENAI_API_KEY`.\n"
-        "Pipeline auto preflight: enabled - local Codex/Claude/Kimi nodes use a `kimi` shell bootstrap.\n"
-        "Pipeline auto preflight matches: codex_plan (codex) via `target.shell_init`, claude_review (claude) via `target.shell_init`\n"
+        "Pipeline run/smoke auto preflight: enabled - local Codex/Claude/Kimi nodes use a `kimi` shell bootstrap.\n"
+        "Pipeline run/smoke auto preflight matches: codex_plan (codex) via `target.shell_init`, claude_review (claude) via `target.shell_init`\n"
     )
     assert "Run check-local-custom-kimi: completed" in result.stdout
     assert captured["submitted_pipeline"] is fake_pipeline
@@ -6111,6 +6153,8 @@ def test_doctor_outputs_json_report(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     _disable_local_readiness_probes(monkeypatch)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: _bundled_kimi_smoke_pipeline())
+    monkeypatch.setattr(agentflow.cli, "_pipeline_launch_inspection_nodes", lambda pipeline: [])
 
     result = runner.invoke(app, ["doctor", "--output", "json"])
 
@@ -6118,12 +6162,28 @@ def test_doctor_outputs_json_report(monkeypatch):
     assert json.loads(result.stdout) == {
         "status": "ok",
         "checks": [{"name": "kimi_shell_helper", "status": "ok", "detail": "ready"}],
+        "pipeline": {
+            "auto_preflight": {
+                "enabled": True,
+                "reason": "path matches the bundled real-agent smoke pipeline.",
+                "matches": [
+                    {"node_id": "codex_plan", "agent": "codex", "trigger": "target.bootstrap"},
+                    {"node_id": "claude_review", "agent": "claude", "trigger": "target.bootstrap"},
+                ],
+                "match_summary": [
+                    "codex_plan (codex) via `target.bootstrap`",
+                    "claude_review (claude) via `target.bootstrap`",
+                ],
+            }
+        },
     }
 
 
 def test_doctor_outputs_json_summary_report(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     _disable_local_readiness_probes(monkeypatch)
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: _bundled_kimi_smoke_pipeline())
+    monkeypatch.setattr(agentflow.cli, "_pipeline_launch_inspection_nodes", lambda pipeline: [])
     monkeypatch.setattr(
         agentflow.cli,
         "build_local_smoke_doctor_report",
@@ -6161,6 +6221,20 @@ def test_doctor_outputs_json_summary_report(monkeypatch):
             },
             {"name": "kimi_shell_helper", "status": "ok", "detail": "ready"},
         ],
+        "pipeline": {
+            "auto_preflight": {
+                "enabled": True,
+                "reason": "path matches the bundled real-agent smoke pipeline.",
+                "matches": [
+                    {"node_id": "codex_plan", "agent": "codex", "trigger": "target.bootstrap"},
+                    {"node_id": "claude_review", "agent": "claude", "trigger": "target.bootstrap"},
+                ],
+                "match_summary": [
+                    "codex_plan (codex) via `target.bootstrap`",
+                    "claude_review (claude) via `target.bootstrap`",
+                ],
+            }
+        },
     }
 
 
@@ -6168,6 +6242,8 @@ def test_doctor_defaults_to_json_report(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     _disable_local_readiness_probes(monkeypatch)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: _bundled_kimi_smoke_pipeline())
+    monkeypatch.setattr(agentflow.cli, "_pipeline_launch_inspection_nodes", lambda pipeline: [])
     monkeypatch.setattr(agentflow.cli, "_stream_supports_tty_summary", lambda *, err: False)
 
     result = runner.invoke(app, ["doctor"])
@@ -6176,6 +6252,20 @@ def test_doctor_defaults_to_json_report(monkeypatch):
     assert json.loads(result.stdout) == {
         "status": "ok",
         "checks": [{"name": "kimi_shell_helper", "status": "ok", "detail": "ready"}],
+        "pipeline": {
+            "auto_preflight": {
+                "enabled": True,
+                "reason": "path matches the bundled real-agent smoke pipeline.",
+                "matches": [
+                    {"node_id": "codex_plan", "agent": "codex", "trigger": "target.bootstrap"},
+                    {"node_id": "claude_review", "agent": "claude", "trigger": "target.bootstrap"},
+                ],
+                "match_summary": [
+                    "codex_plan (codex) via `target.bootstrap`",
+                    "claude_review (claude) via `target.bootstrap`",
+                ],
+            }
+        },
     }
 
 
@@ -6183,23 +6273,37 @@ def test_doctor_defaults_to_summary_report_on_tty(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     _disable_local_readiness_probes(monkeypatch)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: _bundled_kimi_smoke_pipeline())
+    monkeypatch.setattr(agentflow.cli, "_pipeline_launch_inspection_nodes", lambda pipeline: [])
     monkeypatch.setattr(agentflow.cli, "_stream_supports_tty_summary", lambda *, err: True)
 
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout == "Doctor: ok\n- kimi_shell_helper: ok - ready\n"
+    assert result.stdout == (
+        "Doctor: ok\n"
+        "- kimi_shell_helper: ok - ready\n"
+        "Pipeline auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
+        "Pipeline auto preflight matches: codex_plan (codex) via `target.bootstrap`, claude_review (claude) via `target.bootstrap`\n"
+    )
 
 
 def test_doctor_supports_summary_output(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     _disable_local_readiness_probes(monkeypatch)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: _bundled_kimi_smoke_pipeline())
+    monkeypatch.setattr(agentflow.cli, "_pipeline_launch_inspection_nodes", lambda pipeline: [])
 
     result = runner.invoke(app, ["doctor", "--output", "summary"])
 
     assert result.exit_code == 0
-    assert result.stdout == "Doctor: ok\n- kimi_shell_helper: ok - ready\n"
+    assert result.stdout == (
+        "Doctor: ok\n"
+        "- kimi_shell_helper: ok - ready\n"
+        "Pipeline auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
+        "Pipeline auto preflight matches: codex_plan (codex) via `target.bootstrap`, claude_review (claude) via `target.bootstrap`\n"
+    )
 
 
 def test_doctor_without_path_includes_bundled_local_readiness_info(monkeypatch):
@@ -6237,6 +6341,8 @@ def test_doctor_without_path_includes_bundled_local_readiness_info(monkeypatch):
         "- claude_ready: ok - Node `claude_review` (claude) can launch local Claude after the node shell bootstrap; `claude --version` succeeds in the prepared local shell.\n"
         "- codex_ready: ok - Node `codex_plan` (codex) can launch local Codex after the node shell bootstrap; `codex --version` succeeds in the prepared local shell.\n"
         "- codex_auth: ok - Node `codex_plan` (codex) can authenticate local Codex after the node shell bootstrap via `codex login status` or `OPENAI_API_KEY`.\n"
+        "Pipeline auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
+        "Pipeline auto preflight matches: codex_plan (codex) via `target.shell_init`, claude_review (claude) via `target.shell_init`\n"
     )
 
 
@@ -8579,6 +8685,8 @@ nodes:
         "- kimi_shell_helper: ok - ready\n"
         "- launch_env_override: ok - Node `review`: Launch env uses configured `ANTHROPIC_BASE_URL` value `https://api.kimi.com/coding/` instead of current `https://open.bigmodel.cn/api/anthropic` via `provider.base_url`.\n"
         "- bootstrap_env_override: ok - Node `review`: Local shell bootstrap overrides current `ANTHROPIC_API_KEY` for this node via `target.shell_init` (`kimi` helper).\n"
+        "Pipeline auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
+        "Pipeline auto preflight matches: review (claude) via `target.shell_init`\n"
     )
 
 
@@ -8623,6 +8731,16 @@ nodes:
                 "detail": "Node `review`: `shell_init: kimi` requires bash-style shell bootstrap, but `target.shell` resolves to `sh`. Use `shell: bash` with `target.shell_login: true` and `target.shell_interactive: true`, use `bash -lic`, or export provider variables directly.",
             },
         ],
+        "pipeline": {
+            "auto_preflight": {
+                "enabled": True,
+                "reason": "path matches the bundled real-agent smoke pipeline.",
+                "matches": [
+                    {"node_id": "review", "agent": "claude", "trigger": "target.shell_init"},
+                ],
+                "match_summary": ["review (claude) via `target.shell_init`"],
+            }
+        },
     }
 
 
@@ -8630,6 +8748,8 @@ def test_doctor_can_include_shell_bridge_in_json_output(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     _disable_local_readiness_probes(monkeypatch)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: _bundled_kimi_smoke_pipeline())
+    monkeypatch.setattr(agentflow.cli, "_pipeline_launch_inspection_nodes", lambda pipeline: [])
     monkeypatch.setattr(
         agentflow.cli,
         "build_bash_login_shell_bridge_recommendation",
@@ -8647,6 +8767,20 @@ def test_doctor_can_include_shell_bridge_in_json_output(monkeypatch):
     assert json.loads(result.stdout) == {
         "status": "ok",
         "checks": [{"name": "kimi_shell_helper", "status": "ok", "detail": "ready"}],
+        "pipeline": {
+            "auto_preflight": {
+                "enabled": True,
+                "reason": "path matches the bundled real-agent smoke pipeline.",
+                "matches": [
+                    {"node_id": "codex_plan", "agent": "codex", "trigger": "target.bootstrap"},
+                    {"node_id": "claude_review", "agent": "claude", "trigger": "target.bootstrap"},
+                ],
+                "match_summary": [
+                    "codex_plan (codex) via `target.bootstrap`",
+                    "claude_review (claude) via `target.bootstrap`",
+                ],
+            }
+        },
         "shell_bridge": {
             "target": "~/.bash_profile",
             "source": "~/.profile",
@@ -8660,6 +8794,8 @@ def test_doctor_can_include_shell_bridge_in_summary_output(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     _disable_local_readiness_probes(monkeypatch)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: _bundled_kimi_smoke_pipeline())
+    monkeypatch.setattr(agentflow.cli, "_pipeline_launch_inspection_nodes", lambda pipeline: [])
     monkeypatch.setattr(
         agentflow.cli,
         "build_bash_login_shell_bridge_recommendation",
@@ -8677,6 +8813,8 @@ def test_doctor_can_include_shell_bridge_in_summary_output(monkeypatch):
     assert result.stdout == (
         "Doctor: ok\n"
         "- kimi_shell_helper: ok - ready\n"
+        "Pipeline auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
+        "Pipeline auto preflight matches: codex_plan (codex) via `target.bootstrap`, claude_review (claude) via `target.bootstrap`\n"
         "Shell bridge suggestion for `~/.bash_profile` from `~/.profile`:\n"
         "Reason: Bash login shells use `~/.bash_profile`, so `~/.profile` never runs.\n"
         "if [ -f \"$HOME/.profile\" ]; then\n"
@@ -8689,12 +8827,20 @@ def test_doctor_shell_bridge_summary_reports_when_no_fix_is_needed(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     _disable_local_readiness_probes(monkeypatch)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: _bundled_kimi_smoke_pipeline())
+    monkeypatch.setattr(agentflow.cli, "_pipeline_launch_inspection_nodes", lambda pipeline: [])
     monkeypatch.setattr(agentflow.cli, "build_bash_login_shell_bridge_recommendation", lambda: None)
 
     result = runner.invoke(app, ["doctor", "--output", "summary", "--shell-bridge"])
 
     assert result.exit_code == 0
-    assert result.stdout == "Doctor: ok\n- kimi_shell_helper: ok - ready\nShell bridge suggestion: not needed\n"
+    assert result.stdout == (
+        "Doctor: ok\n"
+        "- kimi_shell_helper: ok - ready\n"
+        "Pipeline auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
+        "Pipeline auto preflight matches: codex_plan (codex) via `target.bootstrap`, claude_review (claude) via `target.bootstrap`\n"
+        "Shell bridge suggestion: not needed\n"
+    )
 
 
 def test_doctor_with_pipeline_path_warns_for_custom_home_login_startup(tmp_path, monkeypatch):
@@ -8813,6 +8959,7 @@ nodes:
             }
         ],
         "pipeline": {
+            "auto_preflight_scope": "run/smoke",
             "auto_preflight": {
                 "enabled": False,
                 "reason": "path does not match the bundled smoke pipeline and no local Codex/Claude/Kimi node uses `kimi` bootstrap.",
@@ -8969,9 +9116,17 @@ print(json.dumps({\"exit_code\": result.exit_code, \"stdout\": result.stdout}))
     assert payload == {
         "exit_code": 0,
         "stdout": json.dumps({
-        "status": "ok",
-        "checks": [{"name": "kimi_shell_helper", "status": "ok", "detail": "ready"}],
-    }, indent=2) + "\n",
+            "status": "ok",
+            "checks": [{"name": "kimi_shell_helper", "status": "ok", "detail": "ready"}],
+            "pipeline": {
+                "auto_preflight": {
+                    "enabled": True,
+                    "reason": "path matches the bundled real-agent smoke pipeline.",
+                    "matches": [],
+                    "match_summary": [],
+                }
+            },
+        }, indent=2) + "\n",
     }
 
 

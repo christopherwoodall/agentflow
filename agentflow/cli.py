@@ -695,18 +695,20 @@ def _pipeline_launch_env_inheritance_checks(nodes: list[dict[str, object]]) -> l
 
 def _doctor_report_for_path(path: str | None = None) -> tuple[object, dict[str, object] | None, object | None]:
     if path is None:
+        selected_path = default_smoke_pipeline_path()
         report = _doctor_report()
         try:
-            pipeline = _load_pipeline(default_smoke_pipeline_path())
+            pipeline = _load_pipeline(selected_path)
         except typer.Exit:
             return report, None, None
+        include_ok_local_checks = _include_ok_local_preflight_checks(selected_path, pipeline)
         return (
             _augment_preflight_report(
                 report,
                 pipeline,
-                include_ok_local_checks=_include_ok_local_preflight_checks(default_smoke_pipeline_path(), pipeline),
+                include_ok_local_checks=include_ok_local_checks,
             ),
-            None,
+            {"auto_preflight": _auto_smoke_preflight_metadata(selected_path, pipeline)},
             pipeline,
         )
     pipeline = _load_pipeline(path)
