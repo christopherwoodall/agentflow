@@ -9,7 +9,7 @@ help:
 	  'Available targets:' \
 	  '  python        Prefer .venv/bin/python when available, else python3' \
 	  '  test          Run the Python test suite' \
-	  '  toolchain-local Verify `bash -lic` + `kimi` still exposes local codex and claude and report bash startup' \
+	  '  toolchain-local Verify `bash -lic` + `kimi` still exposes local codex and claude, report bash startup, and show Codex auth sources' \
 	  '  verify-local  Run the full local Codex + Claude-on-Kimi verification stack across external doctor, inspect, check-local, and run paths' \
 	  '  doctor-local-custom Verify a temporary external Codex + Claude-on-Kimi pipeline through `agentflow doctor`' \
 	  '  doctor-local-custom-shell-init Verify a temporary external Codex + Claude-on-Kimi `shell_init: kimi` pipeline through `agentflow doctor`' \
