@@ -3,15 +3,9 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
-python_bin="${AGENTFLOW_PYTHON:-}"
+. "$script_dir/custom-local-kimi-helpers.sh"
 
-if [ -z "$python_bin" ]; then
-  if [ -x "$repo_root/.venv/bin/python" ]; then
-    python_bin="$repo_root/.venv/bin/python"
-  else
-    python_bin="python3"
-  fi
-fi
+python_bin="$(agentflow_repo_python "$repo_root")"
 
 tmpdir="$(mktemp -d)"
 inspect_path="$tmpdir/custom-kimi-inspect.yaml"
@@ -34,27 +28,10 @@ cleanup() {
 
 trap cleanup EXIT
 
-cat >"$inspect_path" <<'YAML'
-name: custom-kimi-inspect
-description: Temporary external inspect test for local Codex plus Claude-on-Kimi.
-working_dir: .
-concurrency: 2
-local_target_defaults:
-  bootstrap: kimi
-nodes:
-  - id: codex_plan
-    agent: codex
-    env:
-      OPENAI_BASE_URL: ""
-    prompt: |
-      Reply with exactly: codex ok
-
-  - id: claude_review
-    agent: claude
-    provider: kimi
-    prompt: |
-      Reply with exactly: claude ok
-YAML
+write_custom_local_kimi_pipeline \
+  "$inspect_path" \
+  "custom-kimi-inspect" \
+  "Temporary external inspect test for local Codex plus Claude-on-Kimi."
 
 printf "custom inspect pipeline path: %s\n" "$inspect_path"
 

@@ -114,7 +114,7 @@ To verify the broader "real project in another directory" path with the same loc
 make check-local-custom
 ```
 
-That helper writes a temporary pipeline outside this repo and runs `agentflow check-local` against it, which makes it easier to catch regressions in custom-pipeline path resolution and shared Kimi bootstrap handling before they reach users.
+That helper writes the shared temporary local Codex + Claude-on-Kimi pipeline outside this repo and runs `agentflow check-local` against it, which makes it easier to catch regressions in custom-pipeline path resolution and shared Kimi bootstrap handling before they reach users.
 
 When you want to verify the pre-launch inspection path for that same kind of external Codex + Claude-on-Kimi pipeline, run:
 
@@ -122,7 +122,7 @@ When you want to verify the pre-launch inspection path for that same kind of ext
 make inspect-local-custom
 ```
 
-That helper writes a temporary pipeline outside this repo, runs `agentflow inspect --output summary`, and validates that the reported working directory, per-node `Cwd`, Kimi bootstrap wiring, and prepared Codex/Claude launch summaries all resolve against the external pipeline path.
+That helper writes the same temporary pipeline outside this repo, runs `agentflow inspect --output summary`, and validates that the reported working directory, per-node `Cwd`, Kimi bootstrap wiring, and prepared Codex/Claude launch summaries all resolve against the external pipeline path.
 
 When you want to exercise the main `agentflow run` path against that same kind of external Codex + Claude-on-Kimi pipeline, run:
 
@@ -130,7 +130,7 @@ When you want to exercise the main `agentflow run` path against that same kind o
 make run-local-custom
 ```
 
-That helper also writes a temporary pipeline outside this repo, but it runs `agentflow run --output json-summary --show-preflight` and validates the wrapper contract: run JSON stays on stdout, the successful preflight summary stays on stderr, and both local agent nodes complete with the expected previews. If the live run fails, it now prints the captured stdout/stderr and keeps the temp directory path for debugging.
+That helper also writes the same temporary pipeline outside this repo, but it runs `agentflow run --output json-summary --show-preflight` and validates the wrapper contract: run JSON stays on stdout, the successful preflight summary stays on stderr, and both local agent nodes complete with the expected previews. If the live run fails, it now prints the captured stdout/stderr and keeps the temp directory path for debugging.
 
 When you want the full maintainer smoke sequence in one command, run:
 
