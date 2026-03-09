@@ -1,7 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+python_bin="${AGENTFLOW_PYTHON:-}"
+
+if [ -z "$python_bin" ]; then
+  if [ -x "$repo_root/.venv/bin/python" ]; then
+    python_bin="$repo_root/.venv/bin/python"
+  else
+    python_bin="python3"
+  fi
+fi
+
 expected_anthropic_base_url='https://api.kimi.com/coding/'
+bash_login_startup="$(
+  PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" "$python_bin" - <<'PY'
+from agentflow.local_shell import summarize_target_bash_login_startup
+
+target = {
+    "kind": "local",
+    "shell": "bash",
+    "shell_login": True,
+    "shell_interactive": True,
+}
+print(summarize_target_bash_login_startup(target) or "n/a")
+PY
+)"
+
+printf "bash login startup: %s\n" "$bash_login_startup"
 
 EXPECTED_ANTHROPIC_BASE_URL="$expected_anthropic_base_url" bash -lic '
 command -v kimi >/dev/null 2>&1

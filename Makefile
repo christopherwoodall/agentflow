@@ -9,7 +9,7 @@ help:
 	  'Available targets:' \
 	  '  python        Prefer .venv/bin/python when available, else python3' \
 	  '  test          Run the Python test suite' \
-	  '  toolchain-local Verify `bash -lic` + `kimi` still exposes local codex and claude' \
+	  '  toolchain-local Verify `bash -lic` + `kimi` still exposes local codex and claude and report bash startup' \
 	  '  inspect-local Inspect the bundled local Kimi-backed smoke pipeline' \
 	  '  doctor-local  Check local Codex/Claude/Kimi smoke prerequisites' \
 	  '  smoke-local   Run the bundled local Codex + Claude-on-Kimi smoke test' \
