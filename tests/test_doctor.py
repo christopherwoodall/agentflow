@@ -1091,6 +1091,42 @@ def test_shell_bridge_recommendation_targets_active_login_file_when_bridge_is_mi
     }
 
 
+def test_bash_login_startup_ignores_echoed_source_text(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('echo source ~/.bashrc\n', encoding="utf-8")
+
+    startup_check = _check_bash_login_startup(home)
+
+    assert startup_check.as_dict() == {
+        "name": "bash_login_startup",
+        "status": "warning",
+        "detail": (
+            "Bash login shells fall back to `~/.profile` because neither `~/.bash_profile` nor `~/.bash_login` "
+            "exists, but it does not reference `~/.bashrc`."
+        ),
+    }
+
+
+def test_shell_bridge_recommendation_ignores_echoed_source_text(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('echo source ~/.bashrc\n', encoding="utf-8")
+
+    recommendation = build_bash_login_shell_bridge_recommendation(home=home)
+
+    assert recommendation is not None
+    assert recommendation.as_dict() == {
+        "target": "~/.profile",
+        "source": "~/.bashrc",
+        "snippet": 'if [ -f "$HOME/.bashrc" ]; then\n  . "$HOME/.bashrc"\nfi\n',
+        "reason": (
+            "Bash login shells fall back to `~/.profile` because neither `~/.bash_profile` nor `~/.bash_login` "
+            "exists, but it does not reference `~/.bashrc`."
+        ),
+    }
+
+
 def test_shell_bridge_recommendation_reuses_shadowed_profile_bridge(tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()
