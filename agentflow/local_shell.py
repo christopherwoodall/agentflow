@@ -1445,6 +1445,13 @@ def probe_target_bash_startup_env_var(
 
     effective_home = target_bash_home(target, home=home, env=env, cwd=cwd)
     launch_env = os.environ.copy()
+    if isinstance(env, dict):
+        for key, value in env.items():
+            key_text = str(key)
+            if value is None:
+                launch_env.pop(key_text, None)
+                continue
+            launch_env[key_text] = str(value)
     launch_env["HOME"] = str(effective_home)
     launch_env.pop(env_var, None)
 

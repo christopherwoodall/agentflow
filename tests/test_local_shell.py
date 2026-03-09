@@ -804,6 +804,32 @@ def test_target_bash_startup_exports_env_var_uses_launch_cwd_for_relative_profil
     )
 
 
+def test_target_bash_startup_exports_env_var_uses_launch_env_for_login_startup_sources(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    auth_file = tmp_path / "anthropic.env"
+    auth_file.write_text("export ANTHROPIC_API_KEY=from-launch-env-file\n", encoding="utf-8")
+    (home / ".profile").write_text(
+        'if [ -n "${AGENTFLOW_KIMI_ENV_FILE:-}" ]; then . "$AGENTFLOW_KIMI_ENV_FILE"; fi\n',
+        encoding="utf-8",
+    )
+    target = {
+        "kind": "local",
+        "shell": "bash",
+        "shell_login": True,
+    }
+
+    assert (
+        target_bash_startup_exports_env_var(
+            target,
+            "ANTHROPIC_API_KEY",
+            home=home,
+            env={"AGENTFLOW_KIMI_ENV_FILE": str(auth_file)},
+        )
+        is True
+    )
+
+
 def test_target_bash_startup_exports_env_var_returns_false_when_probe_times_out(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
