@@ -43,6 +43,9 @@ _BASH_INTERACTIVE_STDERR_NOISE = (
     "bash: no job control in this shell",
 )
 _DIAGNOSTIC_TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+_ENV_ASSIGNMENT_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+_SHELL_COMMAND_BOUNDARY_TOKENS = {"&&", "||", "|", ";", "do", "then", "elif"}
+_COMMAND_POSITION_PREFIX_TOKENS = {"builtin", "command", "env", "nohup", "sudo", "time"}
 
 
 def _object_value(obj: object, key: str, default: Any = None) -> Any:
@@ -97,6 +100,17 @@ def _strip_shell_comments(line: str) -> str:
     return "".join(result)
 
 
+def _looks_like_env_assignment(token: str) -> bool:
+    return bool(_ENV_ASSIGNMENT_PATTERN.match(token))
+
+
+def _token_resets_command_position(token: str) -> bool:
+    stripped = token.strip()
+    if stripped in _SHELL_COMMAND_BOUNDARY_TOKENS:
+        return True
+    return stripped.endswith((";", "&&", "||", "|"))
+
+
 def _iter_shell_source_targets(text: str) -> tuple[str, ...]:
     targets: list[str] = []
     for raw_line in text.splitlines():
@@ -107,9 +121,23 @@ def _iter_shell_source_targets(text: str) -> tuple[str, ...]:
             tokens = shlex.split(line, posix=True)
         except ValueError:
             tokens = line.split()
-        for index, token in enumerate(tokens[:-1]):
-            if token in {"source", "."}:
-                targets.append(tokens[index + 1])
+
+        expects_command = True
+        for index, token in enumerate(tokens):
+            if expects_command:
+                if _token_resets_command_position(token):
+                    continue
+                if _looks_like_env_assignment(token) or token in _COMMAND_POSITION_PREFIX_TOKENS:
+                    continue
+                if token in {"source", "."}:
+                    if index + 1 < len(tokens):
+                        targets.append(tokens[index + 1])
+                    expects_command = False
+                    continue
+                expects_command = False
+
+            if _token_resets_command_position(token):
+                expects_command = True
     return tuple(targets)
 
 
@@ -784,31 +812,69 @@ def _check_codex_executable(home: Path | None = None) -> DoctorCheck:
     )
 
 
-def _check_claude_host_executable() -> DoctorCheck:
+def _check_claude_executable(home: Path | None = None) -> DoctorCheck:
     path = shutil.which("claude")
     if path:
         return _executable_ok_check("claude", path)
+
+    env = os.environ.copy()
+    if home is not None:
+        env["HOME"] = str(home)
+    try:
+        result = subprocess.run(
+            ["bash", "-lic", f"type {shlex.quote('claude')} >/dev/null 2>&1 || exit {_CLAUDE_IN_SHELL_MISSING_EXIT_CODE}"],
+            check=False,
+            capture_output=True,
+            env=env,
+            text=True,
+        )
+    except OSError as exc:
+        return DoctorCheck(
+            name="claude",
+            status="failed",
+            detail=f"`claude` is not on PATH, and AgentFlow could not launch `bash -lic` to look for it: {exc}",
+        )
+
+    if result.returncode == 0:
+        return DoctorCheck(
+            name="claude",
+            status="warning",
+            detail=(
+                "`claude` is not on PATH outside the bundled smoke login shell; "
+                "`bash -lic` must provide it for the local smoke pipeline."
+            ),
+        )
+    if result.returncode == _CLAUDE_IN_SHELL_MISSING_EXIT_CODE:
+        return DoctorCheck(
+            name="claude",
+            status="failed",
+            detail="`claude` is not on PATH and is unavailable in `bash -lic`.",
+        )
+    detail = _format_shell_diagnostic(result.stderr) or f"exit status {result.returncode}"
     return DoctorCheck(
         name="claude",
-        status="warning",
-        detail=(
-            "`claude` is not on PATH outside the smoke shell bootstrap; "
-            "`bash -lic` plus `kimi` must provide it for the bundled smoke pipeline."
-        ),
+        status="failed",
+        detail=f"`claude` is not on PATH, and `bash -lic` failed while looking for it: {detail}",
     )
+
+
+def _check_claude_host_executable(home: Path | None = None) -> DoctorCheck:
+    return _check_claude_executable(home)
 
 
 def _reconcile_claude_host_executable_check(
     claude_check: DoctorCheck,
     kimi_check: DoctorCheck,
 ) -> DoctorCheck:
-    if claude_check.status != "warning" or kimi_check.status != "ok":
+    if kimi_check.status != "ok":
         return claude_check
 
-    if (
-        claude_check.detail
-        != "`claude` is not on PATH outside the smoke shell bootstrap; `bash -lic` plus `kimi` must provide it for the bundled smoke pipeline."
-    ):
+    accepted_details = {
+        "`claude` is not on PATH and is unavailable in `bash -lic`.",
+        "`claude` is not on PATH outside the bundled smoke login shell; `bash -lic` must provide it for the local smoke pipeline.",
+        "`claude` is not on PATH outside the smoke shell bootstrap; `bash -lic` plus `kimi` must provide it for the bundled smoke pipeline.",
+    }
+    if claude_check.status not in {"failed", "warning"} or claude_check.detail not in accepted_details:
         return claude_check
 
     return DoctorCheck(
@@ -1249,7 +1315,7 @@ def _reconcile_bash_login_startup_check(
 def build_local_smoke_doctor_report(home: Path | None = None) -> DoctorReport:
     resolved_home = home or Path.home()
     codex_check = _check_codex_executable(resolved_home)
-    claude_check = _check_claude_host_executable()
+    claude_check = _check_claude_executable(resolved_home)
     bash_login_check = _check_bash_login_startup(resolved_home)
     kimi_check = _check_kimi_shell_helper(resolved_home)
     codex_check = _reconcile_codex_executable_check(codex_check, kimi_check)
