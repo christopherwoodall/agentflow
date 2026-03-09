@@ -1086,8 +1086,15 @@ def _shell_command_loads_kimi_from_bash_env(
     home: Path | None = None,
     cwd: Path | str | None = None,
     env: dict[str, str] | None = None,
+    interactive_bash: bool | None = None,
 ) -> bool:
-    bash_env_file = _bash_env_file_for_shell_target(command, home=home, cwd=cwd, env=env)
+    bash_env_file = _bash_env_file_for_shell_target(
+        command,
+        home=home,
+        cwd=cwd,
+        env=env,
+        interactive_bash=interactive_bash,
+    )
     if bash_env_file is None:
         return False
     resolved_home, path = bash_env_file
@@ -1106,11 +1113,18 @@ def _shell_command_env_var_value_from_bash_env(
     home: Path | None = None,
     cwd: Path | str | None = None,
     env: dict[str, str] | None = None,
+    interactive_bash: bool | None = None,
 ) -> str | None:
     if not isinstance(command, str) or not command.strip() or not env_var:
         return None
 
-    bash_env_file = _bash_env_file_for_shell_target(command, home=home, cwd=cwd, env=env)
+    bash_env_file = _bash_env_file_for_shell_target(
+        command,
+        home=home,
+        cwd=cwd,
+        env=env,
+        interactive_bash=interactive_bash,
+    )
     if bash_env_file is None:
         return None
 
@@ -1129,7 +1143,17 @@ def _bash_env_file_for_shell_target(
     home: Path | None = None,
     cwd: Path | str | None = None,
     env: dict[str, str] | None = None,
+    interactive_bash: bool | None = None,
 ) -> tuple[Path, Path] | None:
+    flags = _bash_shell_flags_for_command(command)
+    if not flags.uses_bash:
+        return None
+    if interactive_bash is None:
+        if flags.interactive:
+            return None
+    elif interactive_bash:
+        return None
+
     resolved_home = _shell_command_effective_home_for_target(command, "bash", home=home, cwd=cwd, env=env)
     resolved_env = _shell_command_env_for_target(command, "bash", env=env)
     bash_env = str(resolved_env.get("BASH_ENV", "") or "").strip()
@@ -1683,6 +1707,7 @@ def shell_template_exports_env_var_before_command(
     home: Path | None = None,
     cwd: Path | str | None = None,
     env: dict[str, str] | None = None,
+    interactive_bash: bool | None = None,
 ) -> bool:
     return shell_template_exported_env_var_value_before_command(
         shell,
@@ -1690,6 +1715,7 @@ def shell_template_exports_env_var_before_command(
         home=home,
         cwd=cwd,
         env=env,
+        interactive_bash=interactive_bash,
     ) is not None
 
 
@@ -1700,6 +1726,7 @@ def shell_template_exported_env_var_value_before_command(
     home: Path | None = None,
     cwd: Path | str | None = None,
     env: dict[str, str] | None = None,
+    interactive_bash: bool | None = None,
 ) -> str | None:
     if not isinstance(shell, str) or not shell.strip():
         return None
@@ -1709,7 +1736,14 @@ def shell_template_exported_env_var_value_before_command(
 
     prefixed_value = _shell_command_prefix_env_value(shell, env_var)
     rcfile_value = _shell_command_env_var_value_from_bash_rcfile(shell, env_var, home=home, cwd=cwd, env=env)
-    bash_env_value = _shell_command_env_var_value_from_bash_env(shell, env_var, home=home, cwd=cwd, env=env)
+    bash_env_value = _shell_command_env_var_value_from_bash_env(
+        shell,
+        env_var,
+        home=home,
+        cwd=cwd,
+        env=env,
+        interactive_bash=interactive_bash,
+    )
 
     startup_value = rcfile_value if rcfile_value is not None else bash_env_value
 
@@ -2387,6 +2421,7 @@ def kimi_shell_init_requires_interactive_bash_warning(
         home=home,
         cwd=cwd,
         env=env,
+        interactive_bash=uses_interactive_bash,
     ):
         return None
     guarded_bashrc = bashrc_returns_early_for_noninteractive_shell(effective_home)

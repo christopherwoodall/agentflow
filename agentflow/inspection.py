@@ -334,6 +334,7 @@ def _auth_summary(
             home=effective_home,
             cwd=cwd,
             env=launch_env,
+            interactive_bash=target_uses_interactive_bash(target),
         )
         prefixed_value = shell_command_prefix_env_value(shell if isinstance(shell, str) else None, api_key_env)
         if explicit_bootstrap_source is None and (
@@ -439,6 +440,7 @@ def _local_bootstrap_auth_override_source(
             home=effective_home,
             cwd=cwd,
             env=launch_env,
+            interactive_bash=target_uses_interactive_bash(target),
         )
     ) or _has_nonempty_shell_value(shell_command_prefix_env_value(shell if isinstance(shell, str) else None, api_key_env)):
         return {"source": "target.shell"}
@@ -854,6 +856,7 @@ def _local_bootstrap_sets_env_var(
         home=effective_home,
         cwd=cwd,
         env=env,
+        interactive_bash=target_uses_interactive_bash(target),
     ):
         return True
     if shell_command_prefixes_env_var(shell if isinstance(shell, str) else None, env_var):

@@ -1040,6 +1040,7 @@ def _provider_credentials_local_bootstrap_probe(
                 home=effective_home,
                 cwd=launch_cwd,
                 env=launch_env,
+                interactive_bash=target_uses_interactive_bash(target),
             )
         ):
             return _LocalBootstrapCredentialProbe(found=True)
