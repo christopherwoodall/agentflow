@@ -313,6 +313,7 @@ def _auth_summary(
     helper_bootstrap_source: tuple[str, str] | None = None
     bash_startup_source: tuple[str, str] | None = None
     provider_uses_kimi_helper_auth = api_key_env == "ANTHROPIC_API_KEY"
+    helper_bootstrap_is_primary = False
     if getattr(target, "kind", None) == "local":
         effective_home = target_bash_home(target, env=launch_env, cwd=cwd)
         shell_init = getattr(target, "shell_init", None)
@@ -342,8 +343,14 @@ def _auth_summary(
 
         if provider_uses_kimi_helper_auth or node.agent == AgentKind.CODEX:
             helper_bootstrap_source = _kimi_helper_bootstrap_source(target)
+            helper_bootstrap_is_primary = _helper_bootstrap_is_primary_auth_source(
+                node,
+                resolved_provider,
+                api_key_env,
+                helper_bootstrap_source,
+            )
 
-        if helper_bootstrap_source is None and target_bash_startup_exports_env_var(
+        if not helper_bootstrap_is_primary and target_bash_startup_exports_env_var(
             target,
             api_key_env,
             home=effective_home,
