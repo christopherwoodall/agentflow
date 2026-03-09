@@ -9603,7 +9603,7 @@ cli_module.build_local_smoke_doctor_report = lambda: DoctorReport(
 )
 cli_module._load_pipeline = lambda path: SimpleNamespace(nodes=[])
 cli_module._pipeline_launch_inspection_nodes = lambda pipeline: []
-result = CliRunner().invoke(cli_module.app, [\"doctor\"])
+result = CliRunner().invoke(cli_module.app, [\"doctor\", \"--output\", \"json\"])
 print(json.dumps({\"exit_code\": result.exit_code, \"stdout\": result.stdout}))
 """
     completed = subprocess.run(
