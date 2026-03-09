@@ -147,6 +147,11 @@ class Orchestrator:
             "payload": self._sanitize_launch_value("payload", plan.payload),
         }
 
+    async def _write_launch_artifacts(self, run_id: str, node_id: str, attempt_number: int, plan: Any) -> None:
+        payload = self._launch_artifact_payload(attempt_number, plan)
+        await self.store.write_artifact_json(run_id, node_id, "launch.json", payload)
+        await self.store.write_artifact_json(run_id, node_id, f"launch-attempt-{attempt_number}.json", payload)
+
     async def _mark_node_cancelled(self, run_id: str, node_id: str, reason: str) -> None:
         record = self.store.get_run(run_id)
         result = record.nodes[node_id]
@@ -184,12 +189,7 @@ class Orchestrator:
             parser.start_attempt(attempt_number)
             prepared = adapter.prepare(node, prompt, paths)
             plan = runner.plan_execution(node, prepared, paths)
-            await self.store.write_artifact_json(
-                run_id,
-                node_id,
-                "launch.json",
-                self._launch_artifact_payload(attempt_number, plan),
-            )
+            await self._write_launch_artifacts(run_id, node_id, attempt_number, plan)
             await self.store.append_artifact_text(
                 run_id,
                 node_id,

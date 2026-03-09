@@ -279,6 +279,43 @@ async def test_orchestrator_retry_isolates_final_capture_from_failed_attempt_std
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_preserves_per_attempt_launch_artifacts_on_retry(tmp_path: Path):
+    orchestrator = make_orchestrator(tmp_path)
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "retry-launch-artifacts",
+            "working_dir": str(tmp_path),
+            "nodes": [
+                {
+                    "id": "flaky",
+                    "agent": "codex",
+                    "prompt": "recovered",
+                    "retries": 1,
+                    "retry_backoff_seconds": 0.01,
+                }
+            ],
+        }
+    )
+
+    run = await orchestrator.submit(pipeline)
+    completed = await orchestrator.wait(run.id, timeout=5)
+
+    latest_launch = json.loads(orchestrator.store.read_artifact_text(completed.id, "flaky", "launch.json"))
+    first_attempt_launch = json.loads(
+        orchestrator.store.read_artifact_text(completed.id, "flaky", "launch-attempt-1.json")
+    )
+    second_attempt_launch = json.loads(
+        orchestrator.store.read_artifact_text(completed.id, "flaky", "launch-attempt-2.json")
+    )
+
+    assert completed.status.value == "completed"
+    assert latest_launch["attempt"] == 2
+    assert first_attempt_launch["attempt"] == 1
+    assert second_attempt_launch["attempt"] == 2
+    assert latest_launch == second_attempt_launch
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_cancels_running_nodes(tmp_path: Path):
     orchestrator = make_orchestrator(tmp_path)
     pipeline = PipelineSpec.model_validate(
