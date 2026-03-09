@@ -13,6 +13,12 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
+def _copy_script(source: Path, destination: Path) -> Path:
+    destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    destination.chmod(0o755)
+    return destination
+
+
 def _repo_python(repo_root: Path) -> str:
     python_bin = repo_root / ".venv" / "bin" / "python"
     return str(python_bin if python_bin.exists() else Path(sys.executable))
@@ -88,6 +94,34 @@ def test_verify_local_kimi_shell_script_reports_bash_profile_startup_when_presen
     assert completed.stderr == ""
 
 
+def test_verify_custom_local_kimi_shell_init_wrapper_forces_shell_init_mode(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+
+    wrapper_path = _copy_script(
+        repo_root / "scripts" / "verify-custom-local-kimi-shell-init.sh",
+        scripts_dir / "verify-custom-local-kimi-shell-init.sh",
+    )
+    _write_executable(
+        scripts_dir / "verify-custom-local-kimi-pipeline.sh",
+        'printf "%s\\n" "${AGENTFLOW_KIMI_PIPELINE_MODE:-}"\n',
+    )
+
+    completed = subprocess.run(
+        ["bash", str(wrapper_path)],
+        capture_output=True,
+        cwd=tmp_path,
+        env={**os.environ, "AGENTFLOW_KIMI_PIPELINE_MODE": "shell-wrapper"},
+        text=True,
+        timeout=5,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == "shell-init"
+    assert completed.stderr == ""
+
+
 def test_verify_local_kimi_shell_script_times_out_when_kimi_hangs(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -109,3 +143,70 @@ def test_verify_local_kimi_shell_script_times_out_when_kimi_hangs(tmp_path: Path
     assert "~/.profile: present" in completed.stdout
     assert "Timed out after 0.2s: env" in completed.stderr
     assert elapsed < 3
+
+
+def test_verify_local_kimi_stack_script_runs_steps_in_expected_order(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+
+    stack_path = _copy_script(
+        repo_root / "scripts" / "verify-local-kimi-stack.sh",
+        scripts_dir / "verify-local-kimi-stack.sh",
+    )
+    log_path = tmp_path / "calls.log"
+    fake_python = tmp_path / "fake-python"
+
+    _write_executable(
+        fake_python,
+        'printf "python:%s\\n" "$*" >>"$AGENTFLOW_TEST_LOG"\n',
+    )
+
+    for script_name in (
+        "verify-local-kimi-shell.sh",
+        "verify-custom-local-kimi-doctor.sh",
+        "verify-custom-local-kimi-inspect.sh",
+        "verify-custom-local-kimi-pipeline.sh",
+        "verify-custom-local-kimi-shell-init.sh",
+        "verify-custom-local-kimi-run.sh",
+    ):
+        _write_executable(
+            scripts_dir / script_name,
+            'printf "%s mode=%s\\n" "${0##*/}" "${AGENTFLOW_KIMI_PIPELINE_MODE:-}" >>"$AGENTFLOW_TEST_LOG"\n',
+        )
+
+    completed = subprocess.run(
+        ["bash", str(stack_path)],
+        capture_output=True,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "AGENTFLOW_PYTHON": str(fake_python),
+            "AGENTFLOW_TEST_LOG": str(log_path),
+        },
+        text=True,
+        timeout=5,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    assert log_path.read_text(encoding="utf-8").splitlines() == [
+        "verify-local-kimi-shell.sh mode=",
+        "verify-custom-local-kimi-doctor.sh mode=",
+        "verify-custom-local-kimi-doctor.sh mode=shell-init",
+        "verify-custom-local-kimi-doctor.sh mode=shell-wrapper",
+        "verify-custom-local-kimi-inspect.sh mode=",
+        "verify-custom-local-kimi-inspect.sh mode=shell-init",
+        "verify-custom-local-kimi-inspect.sh mode=shell-wrapper",
+        "python:-m agentflow check-local --output summary",
+        "verify-custom-local-kimi-pipeline.sh mode=",
+        "verify-custom-local-kimi-shell-init.sh mode=",
+        "verify-custom-local-kimi-pipeline.sh mode=shell-wrapper",
+        "verify-custom-local-kimi-run.sh mode=",
+        "verify-custom-local-kimi-run.sh mode=shell-init",
+        "verify-custom-local-kimi-run.sh mode=shell-wrapper",
+    ]
+    assert completed.stdout.count("== ") == 14
+    assert "== Shell toolchain ==" in completed.stdout
+    assert "== Bundled check-local ==" in completed.stdout
+    assert "== External custom run (target.shell) ==" in completed.stdout
