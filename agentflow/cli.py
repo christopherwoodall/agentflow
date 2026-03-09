@@ -730,6 +730,7 @@ def _node_kimi_shell_bootstrap_check(node: object) -> DoctorCheck | None:
         target,
         home=effective_home,
         cwd=launch_cwd,
+        env=launch_env,
     )
     if interactive_warning is not None:
         return DoctorCheck(
@@ -878,7 +879,13 @@ def _provider_credentials_local_bootstrap_probe(
         launch_cwd = _local_target_launch_cwd(node, pipeline)
         effective_home = target_bash_home(target, env=launch_env, cwd=launch_cwd)
         shell_init = getattr(target, "shell_init", None)
-        if shell_init_exports_env_var(shell_init, api_key_env, home=effective_home, cwd=launch_cwd):
+        if shell_init_exports_env_var(
+            shell_init,
+            api_key_env,
+            home=effective_home,
+            cwd=launch_cwd,
+            env=launch_env,
+        ):
             return _LocalBootstrapCredentialProbe(found=True)
 
         shell = getattr(target, "shell", None)
@@ -887,6 +894,7 @@ def _provider_credentials_local_bootstrap_probe(
             api_key_env,
             home=effective_home,
             cwd=launch_cwd,
+            env=launch_env,
         ):
             return _LocalBootstrapCredentialProbe(found=True)
         if shell_command_prefixes_env_var(shell if isinstance(shell, str) else None, api_key_env):
@@ -942,6 +950,50 @@ def _effective_launch_env_value(key: str, launch_env: dict[str, str]) -> str:
     return str(os.getenv(key, "") or "")
 
 
+def _provider_credentials_override_source(
+    api_key_env: str,
+    *,
+    node_env: dict[str, str],
+    provider_env: dict[str, str],
+) -> str | None:
+    if api_key_env in node_env:
+        return "node.env"
+    if api_key_env in provider_env:
+        return "provider.env"
+    return None
+
+
+def _provider_credentials_missing_detail(
+    *,
+    node_id: str,
+    agent: str,
+    api_key_env: str,
+    provider_name: str | None,
+    launch_env: dict[str, str],
+    node_env: dict[str, str],
+    provider_env: dict[str, str],
+) -> str:
+    provider_detail = f" provider `{provider_name}`" if provider_name else ""
+    current_value = str(os.getenv(api_key_env, "") or "").strip()
+    launch_value = _effective_launch_env_value(api_key_env, launch_env).strip()
+    override_source = _provider_credentials_override_source(
+        api_key_env,
+        node_env=node_env,
+        provider_env=provider_env,
+    )
+    if current_value and api_key_env in launch_env and not launch_value:
+        source_detail = f" via `{override_source}`" if override_source else ""
+        return (
+            f"Node `{node_id}` ({agent}) requires `{api_key_env}` for{provider_detail}, but the launch env clears "
+            f"the current environment value{source_detail}."
+        )
+
+    return (
+        f"Node `{node_id}` ({agent}) requires `{api_key_env}` for{provider_detail}, but it is not set in "
+        "the current environment, `node.env`, or `provider.env`."
+    )
+
+
 def _pipeline_provider_credential_checks(pipeline: object) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
     for node in getattr(pipeline, "nodes", None) or []:
@@ -984,9 +1036,14 @@ def _pipeline_provider_credential_checks(pipeline: object) -> list[DoctorCheck]:
             DoctorCheck(
                 name="provider_credentials",
                 status="failed",
-                detail=(
-                    f"Node `{node_id}` ({agent}) requires `{api_key_env}` for{provider_detail}, but it is not set in "
-                    "the current environment, `node.env`, or `provider.env`."
+                detail=_provider_credentials_missing_detail(
+                    node_id=node_id,
+                    agent=agent,
+                    api_key_env=api_key_env,
+                    provider_name=provider_name,
+                    launch_env=launch_env,
+                    node_env=node_env,
+                    provider_env=provider_env,
                 ),
             )
         )
