@@ -3,15 +3,9 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
-python_bin="${AGENTFLOW_PYTHON:-}"
+. "$script_dir/custom-local-kimi-helpers.sh"
 
-if [ -z "$python_bin" ]; then
-  if [ -x "$repo_root/.venv/bin/python" ]; then
-    python_bin="$repo_root/.venv/bin/python"
-  else
-    python_bin="python3"
-  fi
-fi
+python_bin="$(agentflow_repo_python "$repo_root")"
 
 tmpdir="$(mktemp -d)"
 
@@ -40,35 +34,10 @@ cleanup() {
 
 trap cleanup EXIT
 
-cat >"$pipeline_path" <<'YAML'
-name: custom-kimi-run
-description: Temporary external real-agent run test for local Codex plus Claude-on-Kimi.
-working_dir: .
-concurrency: 2
-local_target_defaults:
-  bootstrap: kimi
-nodes:
-  - id: codex_plan
-    agent: codex
-    env:
-      OPENAI_BASE_URL: ""
-    prompt: |
-      Reply with exactly: codex ok
-    timeout_seconds: 180
-    success_criteria:
-      - kind: output_contains
-        value: codex ok
-
-  - id: claude_review
-    agent: claude
-    provider: kimi
-    prompt: |
-      Reply with exactly: claude ok
-    timeout_seconds: 180
-    success_criteria:
-      - kind: output_contains
-        value: claude ok
-YAML
+write_custom_local_kimi_pipeline \
+  "$pipeline_path" \
+  "custom-kimi-run" \
+  "Temporary external real-agent run test for local Codex plus Claude-on-Kimi."
 
 printf "custom run pipeline path: %s\n" "$pipeline_path"
 
