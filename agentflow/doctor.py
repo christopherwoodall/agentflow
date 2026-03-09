@@ -386,6 +386,8 @@ class LocalToolchainReport:
     startup_files: dict[str, str]
     bash_login_startup: str
     shell_bridge: ShellBridgeRecommendation | None
+    kimi_kind: str | None = None
+    kimi_path: str | None = None
     anthropic_base_url: str | None = None
     codex_auth: str | None = None
     codex_path: str | None = None
@@ -401,6 +403,10 @@ class LocalToolchainReport:
             "bash_login_startup": self.bash_login_startup,
             "shell_bridge": None if self.shell_bridge is None else self.shell_bridge.as_dict(),
         }
+        if self.kimi_kind is not None:
+            payload["kimi_kind"] = self.kimi_kind
+        if self.kimi_path is not None:
+            payload["kimi_path"] = self.kimi_path
         if self.anthropic_base_url is not None:
             payload["anthropic_base_url"] = self.anthropic_base_url
         if self.codex_auth is not None:
@@ -1600,6 +1606,8 @@ def _parse_kimi_toolchain_probe_output(stdout: str) -> dict[str, str]:
             continue
         key, value = line.split("=", 1)
         if key in {
+            "KIMI_KIND",
+            "KIMI_PATH",
             "ANTHROPIC_BASE_URL",
             "CODEX_AUTH",
             "CODEX_PATH",
@@ -1629,6 +1637,10 @@ def _run_kimi_toolchain_probe(home: Path | None = None) -> subprocess.CompletedP
     script = "\n".join(
         [
             *_kimi_bootstrap_probe_preamble(),
+            'kimi_kind="$(type -t kimi 2>/dev/null || true)"',
+            'if [ -n "$kimi_kind" ]; then printf "KIMI_KIND=%s\\n" "$kimi_kind"; fi',
+            'kimi_path="$(type -P kimi 2>/dev/null || true)"',
+            'if [ -n "$kimi_path" ]; then printf "KIMI_PATH=%s\\n" "$kimi_path"; fi',
             'printf "ANTHROPIC_BASE_URL=%s\\n" "${ANTHROPIC_BASE_URL:-}"',
             (
                 'if [ "${ANTHROPIC_BASE_URL%/}" != "'
@@ -1823,6 +1835,8 @@ def build_local_kimi_toolchain_report(home: Path | None = None) -> LocalToolchai
             startup_files=startup_files,
             bash_login_startup=startup_summary,
             shell_bridge=shell_bridge,
+            kimi_kind=parsed.get("KIMI_KIND"),
+            kimi_path=parsed.get("KIMI_PATH"),
             anthropic_base_url=parsed.get("ANTHROPIC_BASE_URL"),
             codex_auth=parsed.get("CODEX_AUTH"),
             codex_path=parsed.get("CODEX_PATH"),
@@ -1846,6 +1860,8 @@ def build_local_kimi_toolchain_report(home: Path | None = None) -> LocalToolchai
             startup_files=startup_files,
             bash_login_startup=startup_summary,
             shell_bridge=shell_bridge,
+            kimi_kind=parsed.get("KIMI_KIND"),
+            kimi_path=parsed.get("KIMI_PATH"),
             anthropic_base_url=parsed.get("ANTHROPIC_BASE_URL"),
             codex_auth=parsed.get("CODEX_AUTH"),
             codex_path=parsed.get("CODEX_PATH"),
@@ -1860,6 +1876,8 @@ def build_local_kimi_toolchain_report(home: Path | None = None) -> LocalToolchai
         startup_files=startup_files,
         bash_login_startup=startup_summary,
         shell_bridge=shell_bridge,
+        kimi_kind=parsed.get("KIMI_KIND"),
+        kimi_path=parsed.get("KIMI_PATH"),
         anthropic_base_url=required_fields["anthropic_base_url"],
         codex_auth=required_fields["codex_auth"],
         codex_path=parsed.get("CODEX_PATH"),

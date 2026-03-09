@@ -1602,6 +1602,12 @@ def _render_local_toolchain_summary(report: LocalToolchainReport) -> str:
         lines.append("bash login bridge snippet:")
         for line in report.shell_bridge.snippet.rstrip().splitlines():
             lines.append(f"  {line}")
+    if report.kimi_kind and report.kimi_path:
+        lines.append(f"kimi: {report.kimi_kind} ({report.kimi_path})")
+    elif report.kimi_kind:
+        lines.append(f"kimi: {report.kimi_kind}")
+    elif report.kimi_path:
+        lines.append(f"kimi: {report.kimi_path}")
     if report.anthropic_base_url:
         lines.append(f"ANTHROPIC_BASE_URL={report.anthropic_base_url}")
     if report.codex_auth:
@@ -1641,10 +1647,15 @@ def _build_local_toolchain_summary_payload(report: LocalToolchainReport) -> dict
         },
     }
 
+    kimi: dict[str, str] = {}
+    if report.kimi_kind is not None:
+        kimi["kind"] = report.kimi_kind
+    if report.kimi_path is not None:
+        kimi["path"] = report.kimi_path
     if report.anthropic_base_url is not None:
-        payload["kimi"] = {
-            "anthropic_base_url": report.anthropic_base_url,
-        }
+        kimi["anthropic_base_url"] = report.anthropic_base_url
+    if kimi:
+        payload["kimi"] = kimi
 
     codex: dict[str, str] = {}
     if report.codex_auth is not None:
