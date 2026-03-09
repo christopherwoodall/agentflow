@@ -717,9 +717,16 @@ def _bash_startup_probe_timeout_seconds() -> float:
     return parsed
 
 
-def _read_shell_file_text(path: Path) -> str | None:
+def _read_shell_file_text_or_raise(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="utf-8", errors="replace")
+
+
+def _read_shell_file_text(path: Path) -> str | None:
+    try:
+        return _read_shell_file_text_or_raise(path)
     except OSError:
         return None
 
@@ -928,7 +935,7 @@ def _bash_login_startup_chain(
         return (name,)
 
     try:
-        text = normalized_startup.read_text(encoding="utf-8")
+        text = _read_shell_file_text_or_raise(normalized_startup)
     except OSError as exc:
         raise _shell_startup_read_error(resolved_home, normalized_startup, exc) from exc
 
@@ -1132,50 +1139,80 @@ def _shell_command_bash_rcfile_path(
     tokens = _split_shell_parts(command)
     expects_command = True
     prefix_allows_options = False
+    active_command: str | None = None
+    index = 0
 
-    resolved_home = _shell_command_effective_home_for_target(command, "bash", home=home, cwd=cwd)
-    resolved_env = dict(env or {})
-    resolved_env.update(_shell_command_prefix_env_for_target(command, "bash"))
-
-    for index, token in enumerate(tokens):
+    while index < len(tokens):
+        token = tokens[index]
         normalized = _normalize_shell_token(token)
+        if index > 0 and _is_command_flag(tokens[index - 1]):
+            nested_home = home
+            nested_env = dict(env or {})
+            if active_command is not None:
+                nested_home = _shell_command_effective_home_for_target(
+                    command,
+                    active_command,
+                    home=home,
+                    cwd=cwd,
+                )
+                nested_env.update(_shell_command_prefix_env_for_target(command, active_command))
+            nested = _shell_command_bash_rcfile_path(token, home=nested_home, cwd=cwd, env=nested_env)
+            if nested is not None:
+                return nested
+
         if _token_resets_command_position(token):
             expects_command = True
             prefix_allows_options = False
+            active_command = None
+            index += 1
             continue
 
         if expects_command:
             if token in _COMMAND_POSITION_PREFIX_TOKENS:
                 prefix_allows_options = True
+                index += 1
                 continue
             if _looks_like_env_assignment(token):
+                index += 1
                 continue
             if prefix_allows_options and (token == "--" or token.startswith("-")):
-                continue
-            if os.path.basename(normalized) != "bash":
-                expects_command = False
-                prefix_allows_options = False
+                index += 1
                 continue
 
+            expects_command = False
+            prefix_allows_options = False
+            active_command = os.path.basename(normalized)
+            if active_command != "bash":
+                index += 1
+                continue
+
+            resolved_home = _shell_command_effective_home_for_target(command, "bash", home=home, cwd=cwd)
+            resolved_env = dict(env or {})
+            resolved_env.update(_shell_command_prefix_env_for_target(command, "bash"))
+            interactive = False
+            rcfile_path: Path | None = None
             position = index + 1
             while position < len(tokens):
                 arg = tokens[position]
                 normalized_arg = _normalize_shell_token(arg)
                 if arg == "--":
-                    return None
+                    position += 1
+                    break
                 if normalized_arg in {"--rcfile", "--init-file"}:
                     if position + 1 >= len(tokens):
                         return None
-                    return _resolve_shell_path(
+                    rcfile_path = _resolve_shell_path(
                         tokens[position + 1],
                         home=resolved_home,
                         cwd=cwd,
                         env=resolved_env,
                     )
+                    position += 2
+                    continue
                 if any(normalized_arg.startswith(f"{option}=") for option in _BASH_LONG_FLAGS_WITH_VALUE):
                     option_name, value = normalized_arg.split("=", 1)
                     if option_name in {"--rcfile", "--init-file"} and value:
-                        return _resolve_shell_path(
+                        rcfile_path = _resolve_shell_path(
                             value,
                             home=resolved_home,
                             cwd=cwd,
@@ -1190,11 +1227,35 @@ def _shell_command_bash_rcfile_path(
                     position += 1
                     continue
                 if not arg.startswith("-") or arg == "-":
-                    return None
+                    break
+                if "i" in arg[1:]:
+                    interactive = True
                 if "c" in arg[1:]:
-                    return None
+                    if position + 1 < len(tokens):
+                        nested = _shell_command_bash_rcfile_path(
+                            tokens[position + 1],
+                            home=resolved_home,
+                            cwd=cwd,
+                            env=resolved_env,
+                        )
+                        if nested is not None:
+                            return nested
+                        position += 2
+                    else:
+                        position += 1
+                    break
                 position += 1
-            return None
+
+            if interactive and rcfile_path is not None:
+                return rcfile_path
+
+            expects_command = False
+            prefix_allows_options = False
+            active_command = "bash"
+            index = position
+            continue
+
+        index += 1
 
     return None
 

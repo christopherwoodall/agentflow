@@ -1036,7 +1036,7 @@ nodes:
         "preset=kimi, shell=bash, login=true, startup=~/.profile -> ~/.bashrc, interactive=true, "
         "init=command -v kimi >/dev/null 2>&1 && kimi"
     )
-    assert payload["nodes"][0]["warnings"] == []
+    assert not payload["nodes"][0].get("warnings")
 
 
 def test_inspect_command_json_summary_warns_when_login_bash_reaches_missing_bashrc(tmp_path, monkeypatch):
@@ -3018,7 +3018,7 @@ nodes:
         ["smoke"],
     ],
 )
-def test_run_and_smoke_preflight_skips_codex_auth_probe_when_kimi_shell_init_is_not_interactive(
+def test_run_and_smoke_preflight_accepts_kimi_shell_init_when_login_shell_already_loads_kimi(
     tmp_path,
     monkeypatch,
     command,
@@ -3070,17 +3070,8 @@ nodes:
 
     assert result.exit_code == 0
     assert captured == {"pipeline": "codex-kimi-preflight-warning"}
-    payload = json.loads(result.stderr or result.stdout)
-    assert payload["status"] == "warning"
-    assert payload["checks"] == [
-        {"name": "bash_login_startup", "status": "ok", "detail": "startup ready"},
-        {"name": "kimi_shell_helper", "status": "ok", "detail": "ready"},
-        {
-            "name": "kimi_shell_bootstrap",
-            "status": "warning",
-            "detail": "Node `codex_plan`: `shell_init: kimi` uses bash without interactive startup; helpers from `~/.bashrc` are usually unavailable. Set `target.shell_interactive: true` or use `bash -lic`.",
-        },
-    ]
+    assert result.stderr == ""
+    assert result.stdout == ""
 
 
 @pytest.mark.parametrize(
