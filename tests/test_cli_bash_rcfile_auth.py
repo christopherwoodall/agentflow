@@ -109,3 +109,69 @@ nodes:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["nodes"][0]["auth"] == "`ANTHROPIC_API_KEY` via local bash login and interactive startup files"
+
+
+def test_inspect_command_treats_nested_login_bash_startup_as_auth_source(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text("export ANTHROPIC_API_KEY=test-shell-key\n", encoding="utf-8")
+
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        f"""name: inspect-claude-nested-login-startup
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    provider: anthropic
+    prompt: hi
+    target:
+      kind: local
+      shell: "sh -c 'env HOME={home} bash -lic \\"{{command}}\\"'"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["nodes"][0]["auth"] == "`ANTHROPIC_API_KEY` via local bash login and interactive startup files"
+
+
+def test_doctor_with_pipeline_path_accepts_provider_credentials_from_nested_login_bash_startup(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text("export ANTHROPIC_API_KEY=test-shell-key\n", encoding="utf-8")
+
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        f"""name: doctor-claude-nested-login-startup
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    provider: anthropic
+    prompt: hi
+    target:
+      kind: local
+      shell: "sh -c 'env HOME={home} bash -lic \\"{{command}}\\"'"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    result = runner.invoke(app, ["doctor", str(pipeline_path), "--output", "summary"])
+
+    assert result.exit_code == 0
+    assert "provider_credentials" not in result.stdout
+    assert "provider_credentials_probe" not in result.stdout

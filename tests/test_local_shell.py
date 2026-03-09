@@ -969,6 +969,17 @@ def test_target_bash_home_uses_exec_prefixed_shell_wrapper_env(tmp_path: Path):
     assert target_bash_home(target) == home
 
 
+def test_target_uses_bash_detects_nested_login_and_interactive_bash_wrapper():
+    target = {
+        "kind": "local",
+        "shell": """sh -c 'bash -lic "{command}"'""",
+    }
+
+    assert target_uses_interactive_bash(target) is True
+    assert target_uses_bash(target) is True
+    assert target_uses_login_bash(target) is True
+
+
 def test_target_bash_startup_exports_env_var_prefers_shell_wrapper_env_over_launch_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -999,6 +1010,35 @@ def test_target_bash_startup_exports_env_var_prefers_shell_wrapper_env_over_laun
         is True
     )
     assert observed["env"]["AGENTFLOW_KIMI_ENV_FILE"] == "from-shell-wrapper"
+
+
+def test_target_bash_startup_exports_env_var_uses_nested_login_shell_wrapper_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    auth_file = tmp_path / "anthropic.env"
+    auth_file.write_text("export ANTHROPIC_API_KEY=from-shell-wrapper\n", encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = list(command)
+        observed["env"] = dict(kwargs["env"])
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("agentflow.local_shell.subprocess.run", fake_run)
+
+    target = {
+        "kind": "local",
+        "shell": f"""sh -c 'env HOME={home} AGENTFLOW_KIMI_ENV_FILE={auth_file} bash -lic "{{command}}"'
+""".strip(),
+    }
+
+    assert target_bash_startup_exports_env_var(target, "ANTHROPIC_API_KEY", home=tmp_path) is True
+    assert observed["command"] == ["bash", "-lc", 'test -n "${ANTHROPIC_API_KEY:-}"']
+    assert observed["env"]["AGENTFLOW_KIMI_ENV_FILE"] == str(auth_file)
+    assert observed["env"]["HOME"] == str(home)
 
 
 def test_target_bash_startup_exports_env_var_returns_false_when_probe_times_out(
