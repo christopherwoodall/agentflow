@@ -652,6 +652,28 @@ def test_target_bash_login_startup_chain_includes_bashrc_bridge(tmp_path: Path, 
     assert target_bash_login_startup_chain(target) == ("~/.bash_profile", "~/.profile", "~/.bashrc")
 
 
+def test_target_bash_login_startup_chain_accepts_symlinked_login_file_outside_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    (dotfiles / "bash_profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bash_profile").symlink_to(dotfiles / "bash_profile")
+
+    monkeypatch.setattr("agentflow.local_shell.Path.home", lambda: home)
+
+    target = {
+        "kind": "local",
+        "shell": "bash",
+        "shell_login": True,
+    }
+
+    assert target_bash_login_startup_chain(target) == ("~/.bash_profile", "~/.bashrc")
+
+
 def test_target_bash_login_startup_chain_ignores_echoed_source_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

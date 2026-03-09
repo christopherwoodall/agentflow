@@ -1158,6 +1158,39 @@ nodes:
     )
 
 
+def test_inspect_command_handles_symlinked_login_file_outside_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    (dotfiles / "bash_profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bash_profile").symlink_to(dotfiles / "bash_profile")
+    (home / ".bashrc").write_text("export READY=1\n", encoding="utf-8")
+
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-symlinked-login-file
+working_dir: .
+nodes:
+  - id: plan
+    agent: codex
+    prompt: hi
+    target:
+      kind: local
+      shell: bash
+      shell_login: true
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("agentflow.local_shell.Path.home", lambda: home)
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["nodes"][0]["bootstrap"] == "shell=bash, login=true, startup=~/.bash_profile -> ~/.bashrc"
+
+
 def test_inspect_command_reports_auto_preflight_match_sources(tmp_path):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(

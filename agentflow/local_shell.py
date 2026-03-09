@@ -698,12 +698,14 @@ def _home_relative_shell_path(home: Path, path: Path) -> str:
 
 def _bash_login_startup_chain(home: Path, startup_file: Path, *, seen: frozenset[str] = frozenset()) -> tuple[str, ...]:
     resolved_home = _resolved_home_path(home)
-    resolved_startup = Path(os.path.normpath(str(startup_file.resolve(strict=False))))
-    name = _home_relative_shell_path(resolved_home, resolved_startup)
+    normalized_startup = Path(
+        os.path.normpath(str(startup_file if startup_file.is_absolute() else resolved_home / startup_file))
+    )
+    name = _home_relative_shell_path(resolved_home, normalized_startup)
     if name in seen:
         return (name,)
 
-    text = _read_shell_file_text(resolved_startup)
+    text = _read_shell_file_text(normalized_startup)
     if text is None:
         return (name,)
 
