@@ -763,6 +763,53 @@ def test_shell_template_exports_env_var_before_command_detects_bash_env_file(tmp
     )
 
 
+@pytest.mark.parametrize("option", ["--rcfile", "--init-file"])
+def test_shell_template_exports_env_var_before_command_detects_interactive_bash_rcfile(
+    tmp_path: Path,
+    option: str,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "auth.bashrc").write_text("export ANTHROPIC_API_KEY=test-shell-key\n", encoding="utf-8")
+
+    assert (
+        shell_template_exports_env_var_before_command(
+            f"env HOME={home} bash {option} $HOME/auth.bashrc -ic '{{command}}'",
+            "ANTHROPIC_API_KEY",
+        )
+        is True
+    )
+
+
+def test_shell_template_exported_env_var_value_before_command_prefers_inline_export_over_rcfile(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "auth.bashrc").write_text("export ANTHROPIC_API_KEY=from-rcfile\n", encoding="utf-8")
+
+    assert (
+        shell_template_exported_env_var_value_before_command(
+            f"env HOME={home} bash --rcfile $HOME/auth.bashrc -ic "
+            "'export ANTHROPIC_API_KEY=from-inline && {command}'",
+            "ANTHROPIC_API_KEY",
+        )
+        == "from-inline"
+    )
+
+
+def test_shell_template_exports_env_var_before_command_ignores_noninteractive_bash_rcfile(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "auth.bashrc").write_text("export ANTHROPIC_API_KEY=test-shell-key\n", encoding="utf-8")
+
+    assert (
+        shell_template_exports_env_var_before_command(
+            f"env HOME={home} bash --rcfile $HOME/auth.bashrc -c '{{command}}'",
+            "ANTHROPIC_API_KEY",
+        )
+        is False
+    )
+
+
 def test_shell_template_exports_env_var_before_command_detects_split_assignment_then_export():
     assert (
         shell_template_exports_env_var_before_command(

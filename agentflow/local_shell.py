@@ -1009,11 +1009,10 @@ def _shell_command_loads_kimi_from_bash_env(
     cwd: Path | str | None = None,
     env: dict[str, str] | None = None,
 ) -> bool:
-    resolved_home = _shell_command_effective_home_for_target(command, "bash", home=home, cwd=cwd)
-    bash_env = _shell_command_prefix_env_value_for_target(command, "BASH_ENV", "bash")
-    if not bash_env:
+    bash_env_file = _bash_env_file_for_shell_target(command, home=home, cwd=cwd, env=env)
+    if bash_env_file is None:
         return False
-    path = _resolve_shell_path(bash_env, home=resolved_home, cwd=cwd, env=env)
+    resolved_home, path = bash_env_file
     text = _read_shell_file_text(path)
     if text is None:
         return False
@@ -1033,18 +1032,142 @@ def _shell_command_env_var_value_from_bash_env(
     if not isinstance(command, str) or not command.strip() or not env_var:
         return None
 
-    resolved_home = _shell_command_effective_home_for_target(command, "bash", home=home, cwd=cwd)
-    bash_env = _shell_command_prefix_env_value_for_target(command, "BASH_ENV", "bash")
-    if not bash_env:
+    bash_env_file = _bash_env_file_for_shell_target(command, home=home, cwd=cwd, env=env)
+    if bash_env_file is None:
         return None
 
-    path = _resolve_shell_path(bash_env, home=resolved_home, cwd=cwd, env=env)
+    resolved_home, path = bash_env_file
     text = _read_shell_file_text(path)
     if text is None:
         return None
     if _shell_text_returns_early_for_noninteractive_bash(text):
         return None
     return _shell_file_exported_env_value(path, env_var, home=resolved_home, cwd=cwd, env=env)
+
+
+def _bash_env_file_for_shell_target(
+    command: str | None,
+    *,
+    home: Path | None = None,
+    cwd: Path | str | None = None,
+    env: dict[str, str] | None = None,
+) -> tuple[Path, Path] | None:
+    resolved_home = _shell_command_effective_home_for_target(command, "bash", home=home, cwd=cwd)
+    bash_env = _shell_command_prefix_env_value_for_target(command, "BASH_ENV", "bash")
+    if not bash_env and isinstance(env, dict):
+        bash_env = str(env.get("BASH_ENV", "") or "").strip()
+    if not bash_env:
+        return None
+    path = _resolve_shell_path(bash_env, home=resolved_home, cwd=cwd, env=env)
+    return resolved_home, path
+
+
+def _shell_command_bash_rcfile_path(
+    command: str | None,
+    *,
+    home: Path | None = None,
+    cwd: Path | str | None = None,
+    env: dict[str, str] | None = None,
+) -> Path | None:
+    if not isinstance(command, str) or not command.strip():
+        return None
+    if not _target_bash_shell_flags({"shell": command}).interactive:
+        return None
+
+    tokens = _split_shell_parts(command)
+    expects_command = True
+    prefix_allows_options = False
+
+    resolved_home = _shell_command_effective_home_for_target(command, "bash", home=home, cwd=cwd)
+    resolved_env = dict(env or {})
+    resolved_env.update(_shell_command_prefix_env_for_target(command, "bash"))
+
+    for index, token in enumerate(tokens):
+        normalized = _normalize_shell_token(token)
+        if _token_resets_command_position(token):
+            expects_command = True
+            prefix_allows_options = False
+            continue
+
+        if expects_command:
+            if token in _COMMAND_POSITION_PREFIX_TOKENS:
+                prefix_allows_options = True
+                continue
+            if _looks_like_env_assignment(token):
+                continue
+            if prefix_allows_options and (token == "--" or token.startswith("-")):
+                continue
+            if os.path.basename(normalized) != "bash":
+                expects_command = False
+                prefix_allows_options = False
+                continue
+
+            position = index + 1
+            while position < len(tokens):
+                arg = tokens[position]
+                normalized_arg = _normalize_shell_token(arg)
+                if arg == "--":
+                    return None
+                if normalized_arg in {"--rcfile", "--init-file"}:
+                    if position + 1 >= len(tokens):
+                        return None
+                    return _resolve_shell_path(
+                        tokens[position + 1],
+                        home=resolved_home,
+                        cwd=cwd,
+                        env=resolved_env,
+                    )
+                if any(normalized_arg.startswith(f"{option}=") for option in _BASH_LONG_FLAGS_WITH_VALUE):
+                    option_name, value = normalized_arg.split("=", 1)
+                    if option_name in {"--rcfile", "--init-file"} and value:
+                        return _resolve_shell_path(
+                            value,
+                            home=resolved_home,
+                            cwd=cwd,
+                            env=resolved_env,
+                        )
+                    position += 1
+                    continue
+                if normalized_arg in _BASH_LONG_FLAGS_WITH_VALUE:
+                    position += 2
+                    continue
+                if normalized_arg.startswith("--"):
+                    position += 1
+                    continue
+                if not arg.startswith("-") or arg == "-":
+                    return None
+                if "c" in arg[1:]:
+                    return None
+                position += 1
+            return None
+
+    return None
+
+
+def _shell_command_env_var_value_from_bash_rcfile(
+    command: str | None,
+    env_var: str,
+    *,
+    home: Path | None = None,
+    cwd: Path | str | None = None,
+    env: dict[str, str] | None = None,
+) -> str | None:
+    if not isinstance(command, str) or not command.strip() or not env_var:
+        return None
+
+    resolved_home = _shell_command_effective_home_for_target(command, "bash", home=home, cwd=cwd)
+    resolved_env = dict(env or {})
+    resolved_env.update(_shell_command_prefix_env_for_target(command, "bash"))
+    rcfile_path = _shell_command_bash_rcfile_path(command, home=resolved_home, cwd=cwd, env=resolved_env)
+    if rcfile_path is None:
+        return None
+    return _shell_file_exported_env_value(
+        rcfile_path,
+        env_var,
+        home=resolved_home,
+        cwd=cwd,
+        env=resolved_env,
+    )
 
 
 def _shell_command_loads_env_var_from_bash_env(
@@ -1443,22 +1566,22 @@ def shell_template_exported_env_var_value_before_command(
         return None
 
     prefixed_value = _shell_command_prefix_env_value(shell, env_var)
-    if prefixed_value is not None:
-        return prefixed_value
-
+    rcfile_value = _shell_command_env_var_value_from_bash_rcfile(shell, env_var, home=home, cwd=cwd, env=env)
     bash_env_value = _shell_command_env_var_value_from_bash_env(shell, env_var, home=home, cwd=cwd, env=env)
-    if bash_env_value is not None:
-        return bash_env_value
+
+    startup_value = rcfile_value if rcfile_value is not None else bash_env_value
 
     if "{command}" not in shell:
-        return None
+        if startup_value is not None:
+            return startup_value
+        return prefixed_value
 
     placeholder = "__AGENTFLOW_ENV_EXPORT_TARGET__"
     command = shell.replace("{command}", placeholder)
     exported_value = _shell_command_exported_env_value_before_target(command, env_var, placeholder)
     if exported_value is not None:
         return exported_value
-    return _shell_command_env_var_value_from_sourced_file_before_target(
+    sourced_value = _shell_command_env_var_value_from_sourced_file_before_target(
         command,
         env_var,
         placeholder,
@@ -1466,6 +1589,11 @@ def shell_template_exported_env_var_value_before_command(
         cwd=cwd,
         env=env,
     )
+    if sourced_value is not None:
+        return sourced_value
+    if startup_value is not None:
+        return startup_value
+    return prefixed_value
 
 
 def _explicit_bashrc_kimi_warning(subject: str) -> str:
