@@ -1193,35 +1193,6 @@ def _pipeline_provider_credential_checks(pipeline: object) -> list[DoctorCheck]:
     return checks
 
 
-def _pipeline_bash_login_startup_checks(pipeline: object) -> list[DoctorCheck]:
-    checks: list[DoctorCheck] = []
-    for node in getattr(pipeline, "nodes", None) or []:
-        target = _coerce_local_target(getattr(node, "target", None))
-        if target is None or not target_uses_login_bash(target):
-            continue
-
-        agent = _status_value(getattr(node, "agent", None)).lower()
-        provider = None
-        if agent in {member.value for member in AgentKind}:
-            provider = resolve_provider(getattr(node, "provider", None), AgentKind(agent))
-        launch_env = merge_env_layers(getattr(provider, "env", None), getattr(node, "env", None))
-        launch_cwd = _local_target_launch_cwd(node, pipeline)
-        warning = target_bash_login_startup_warning(target, env=launch_env, cwd=launch_cwd)
-        if warning is None:
-            continue
-
-        node_id = str(getattr(node, "id", "node"))
-        effective_home = target_bash_home(target, env=launch_env, cwd=launch_cwd).resolve()
-        checks.append(
-            DoctorCheck(
-                name="bash_login_startup",
-                status="warning",
-                detail=f"Node `{node_id}` uses bash login startup from `{effective_home}`: {warning}",
-            )
-        )
-    return checks
-
-
 def _merge_doctor_status(current_status: str, extra_checks: list[DoctorCheck]) -> str:
     statuses = {current_status, *(_status_value(check.status) for check in extra_checks)}
     if "failed" in statuses:
@@ -1231,7 +1202,7 @@ def _merge_doctor_status(current_status: str, extra_checks: list[DoctorCheck]) -
     return current_status
 
 
-def _pipeline_bash_login_startup_checks(nodes: list[dict[str, object]]) -> list[DoctorCheck]:
+def _pipeline_launch_bash_login_startup_checks(nodes: list[dict[str, object]]) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
     for node in nodes:
         warnings = node.get("warnings")
@@ -1271,13 +1242,12 @@ def _augment_preflight_report(
     report = _extend_doctor_report(
         report,
         [
-        *_pipeline_bash_login_startup_checks(pipeline),
-        *_pipeline_kimi_shell_bootstrap_checks(pipeline),
-        *_pipeline_provider_credential_checks(pipeline),
-        *build_pipeline_local_kimi_readiness_checks(pipeline),
-        *build_pipeline_local_claude_readiness_checks(pipeline),
-        *build_pipeline_local_codex_readiness_checks(pipeline),
-        *build_pipeline_local_codex_auth_checks(pipeline),
+            *_pipeline_kimi_shell_bootstrap_checks(pipeline),
+            *_pipeline_provider_credential_checks(pipeline),
+            *build_pipeline_local_kimi_readiness_checks(pipeline),
+            *build_pipeline_local_claude_readiness_checks(pipeline),
+            *build_pipeline_local_codex_readiness_checks(pipeline),
+            *build_pipeline_local_codex_auth_checks(pipeline),
         ],
     )
     if include_ok_local_checks and _status_value(getattr(report, "status", "ok")) != "failed":
@@ -1297,7 +1267,7 @@ def _augment_preflight_report(
     return _extend_doctor_report(
         report,
         [
-            *_pipeline_bash_login_startup_checks(inspection_nodes),
+            *_pipeline_launch_bash_login_startup_checks(inspection_nodes),
             *_pipeline_launch_env_override_checks(inspection_nodes),
             *_pipeline_bootstrap_env_override_checks(inspection_nodes),
             *_pipeline_launch_env_inheritance_checks(inspection_nodes),
