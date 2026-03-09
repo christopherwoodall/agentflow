@@ -41,10 +41,27 @@ def _startup_context(
     bashrc_exists: bool | None = None,
     runtime_ready: bool | None = None,
 ) -> dict[str, object]:
+    startup_files = {
+        "~/.bash_profile": "missing",
+        "~/.bash_login": "missing",
+        "~/.profile": "missing",
+    }
+    if login_file in startup_files:
+        startup_files[login_file] = "present"
+    for path in startup_chain:
+        if path in startup_files:
+            startup_files[path] = "present"
+    if shadowed_startup_chain is not None:
+        for path in shadowed_startup_chain:
+            if path in startup_files:
+                startup_files[path] = "present"
+
     context: dict[str, object] = {
         "login_file": login_file,
         "startup_chain": list(startup_chain),
         "startup_summary": "none" if not startup_chain else " -> ".join(startup_chain),
+        "startup_files": startup_files,
+        "startup_files_summary": ", ".join(f"{path}={status}" for path, status in startup_files.items()),
         "bashrc_reachable": bool(startup_chain and startup_chain[-1] == "~/.bashrc"),
     }
     if shadowed_startup_chain is not None:

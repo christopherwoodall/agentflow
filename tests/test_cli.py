@@ -115,8 +115,16 @@ def _shell_bridge_recommendation() -> ShellBridgeRecommendation:
     )
 
 
-def _bash_startup_context(summary: str) -> dict[str, object]:
-    return {"startup_summary": summary}
+def _bash_startup_context(
+    summary: str,
+    *,
+    startup_files: dict[str, str] | None = None,
+) -> dict[str, object]:
+    context: dict[str, object] = {"startup_summary": summary}
+    if startup_files is not None:
+        context["startup_files"] = startup_files
+        context["startup_files_summary"] = ", ".join(f"{path}={status}" for path, status in startup_files.items())
+    return context
 
 
 def _expected_default_kimi_python() -> str:
@@ -213,14 +221,21 @@ def test_render_doctor_summary_appends_bash_startup_summary_suffix():
                 name="bash_login_startup",
                 status="ok",
                 detail="startup ready",
-                context=_bash_startup_context("~/.profile -> ~/.bashrc"),
+                context=_bash_startup_context(
+                    "~/.profile -> ~/.bashrc",
+                    startup_files={
+                        "~/.bash_profile": "missing",
+                        "~/.bash_login": "missing",
+                        "~/.profile": "present",
+                    },
+                ),
             )
         ],
     )
 
     assert _render_doctor_summary(report) == (
         "Doctor: ok\n"
-        "- bash_login_startup: ok - startup ready (startup=~/.profile -> ~/.bashrc)"
+        "- bash_login_startup: ok - startup ready (startup=~/.profile -> ~/.bashrc, files=~/.bash_profile=missing, ~/.bash_login=missing, ~/.profile=present)"
     )
 
 
@@ -239,6 +254,12 @@ def test_doctor_command_json_preserves_bash_startup_context(monkeypatch):
                         "login_file": "~/.profile",
                         "startup_chain": ["~/.profile", "~/.bashrc"],
                         "startup_summary": "~/.profile -> ~/.bashrc",
+                        "startup_files": {
+                            "~/.bash_profile": "missing",
+                            "~/.bash_login": "missing",
+                            "~/.profile": "present",
+                        },
+                        "startup_files_summary": "~/.bash_profile=missing, ~/.bash_login=missing, ~/.profile=present",
                         "bashrc_reachable": True,
                         "bashrc_exists": True,
                     },
@@ -261,6 +282,12 @@ def test_doctor_command_json_preserves_bash_startup_context(monkeypatch):
                     "login_file": "~/.profile",
                     "startup_chain": ["~/.profile", "~/.bashrc"],
                     "startup_summary": "~/.profile -> ~/.bashrc",
+                    "startup_files": {
+                        "~/.bash_profile": "missing",
+                        "~/.bash_login": "missing",
+                        "~/.profile": "present",
+                    },
+                    "startup_files_summary": "~/.bash_profile=missing, ~/.bash_login=missing, ~/.profile=present",
                     "bashrc_reachable": True,
                     "bashrc_exists": True,
                 },
@@ -1000,6 +1027,11 @@ nodes:
             "provider": "kimi, key=ANTHROPIC_API_KEY, url=https://api.kimi.com/coding/",
             "auth": "`ANTHROPIC_API_KEY` via `target.bootstrap` (`kimi` helper)",
             "bootstrap": "preset=kimi, shell=bash, login=true, startup=~/.profile -> ~/.bashrc, interactive=true, init=command -v kimi >/dev/null 2>&1 && kimi",
+            "bash_startup_files": {
+                "~/.bash_profile": "missing",
+                "~/.bash_login": "missing",
+                "~/.profile": "present",
+            },
             "prompt_preview": "Reply with exactly: claude ok",
             "prepared_command": "claude -p 'Reply with exactly: claude ok' --output-format stream-json --verbose --permission-mode bypassPermissions --tools Read,Glob,Grep,LS,NotebookRead,Task,TaskOutput,TodoRead,WebFetch,WebSearch",
             "launch": "bash -l -i -c 'command -v kimi >/dev/null 2>&1 && kimi && eval \"$AGENTFLOW_TARGET_COMMAND\"'",
@@ -1051,6 +1083,11 @@ nodes:
             "provider": "kimi, key=ANTHROPIC_API_KEY, url=https://api.kimi.com/coding/",
             "auth": "`ANTHROPIC_API_KEY` via `target.bootstrap` (`kimi` helper)",
             "bootstrap": "preset=kimi, shell=bash, login=true, startup=~/.profile -> ~/.bashrc, interactive=true, init=export EXTRA_FLAG=1 && command -v kimi >/dev/null 2>&1 && kimi",
+            "bash_startup_files": {
+                "~/.bash_profile": "missing",
+                "~/.bash_login": "missing",
+                "~/.profile": "present",
+            },
             "prompt_preview": "hi",
             "prepared_command": "claude -p hi --output-format stream-json --verbose --permission-mode bypassPermissions --tools Read,Glob,Grep,LS,NotebookRead,Task,TaskOutput,TodoRead,WebFetch,WebSearch",
             "launch": "bash -l -i -c 'export EXTRA_FLAG=1 && command -v kimi >/dev/null 2>&1 && kimi && eval \"$AGENTFLOW_TARGET_COMMAND\"'",
@@ -4536,7 +4573,12 @@ def test_check_local_uses_json_summary_doctor_output_when_run_output_is_json_sum
         "status": "warning",
         "counts": {"ok": 1, "warning": 1, "failed": 0},
         "checks": [
-            {"name": "bash_login_startup", "status": "warning", "detail": "missing bridge"},
+            {
+                "name": "bash_login_startup",
+                "status": "warning",
+                "detail": "missing bridge",
+                "startup_summary": "~/.profile -> ~/.bashrc",
+            },
             {"name": "kimi_shell_helper", "status": "ok", "detail": "ready"},
         ],
         "pipeline": {
@@ -5675,7 +5717,12 @@ def test_doctor_outputs_json_summary_report(monkeypatch):
         "status": "warning",
         "counts": {"ok": 1, "warning": 1, "failed": 0},
         "checks": [
-            {"name": "bash_login_startup", "status": "warning", "detail": "missing bridge"},
+            {
+                "name": "bash_login_startup",
+                "status": "warning",
+                "detail": "missing bridge",
+                "startup_summary": "~/.profile -> ~/.bashrc",
+            },
             {"name": "kimi_shell_helper", "status": "ok", "detail": "ready"},
         ],
     }

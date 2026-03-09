@@ -1368,10 +1368,16 @@ def _doctor_check_summary_suffix(check: object) -> str:
     context = getattr(check, "context", None)
     if not isinstance(context, dict):
         return ""
+    parts: list[str] = []
     startup_summary = context.get("startup_summary")
-    if not isinstance(startup_summary, str) or not startup_summary:
+    if isinstance(startup_summary, str) and startup_summary:
+        parts.append(f"startup={startup_summary}")
+    startup_files_summary = context.get("startup_files_summary")
+    if isinstance(startup_files_summary, str) and startup_files_summary:
+        parts.append(f"files={startup_files_summary}")
+    if not parts:
         return ""
-    return f" (startup={startup_summary})"
+    return f" ({', '.join(parts)})"
 
 
 def _render_doctor_summary(
@@ -1432,13 +1438,24 @@ def _build_doctor_summary_payload(
         status = _status_value(getattr(check, "status", "unknown"))
         if status in counts:
             counts[status] += 1
-        checks.append(
-            {
-                "name": getattr(check, "name", "unknown"),
-                "status": status,
-                "detail": getattr(check, "detail", ""),
-            }
-        )
+        entry = {
+            "name": getattr(check, "name", "unknown"),
+            "status": status,
+            "detail": getattr(check, "detail", ""),
+        }
+        if getattr(check, "name", None) == "bash_login_startup":
+            context = getattr(check, "context", None)
+            if isinstance(context, dict):
+                startup_summary = context.get("startup_summary")
+                if isinstance(startup_summary, str) and startup_summary:
+                    entry["startup_summary"] = startup_summary
+                startup_files = context.get("startup_files")
+                if isinstance(startup_files, dict) and startup_files:
+                    entry["startup_files"] = {
+                        str(path): str(file_status)
+                        for path, file_status in startup_files.items()
+                    }
+        checks.append(entry)
 
     payload: dict[str, object] = {
         "status": _status_value(getattr(report, "status", "unknown")),
