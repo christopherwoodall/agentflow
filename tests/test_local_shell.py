@@ -436,6 +436,26 @@ def test_kimi_shell_init_requires_interactive_bash_warning_accepts_login_shell_s
     assert kimi_shell_init_requires_interactive_bash_warning(target, home=home) is None
 
 
+def test_kimi_shell_init_requires_interactive_bash_warning_ignores_echoed_login_source_text(
+    tmp_path: Path,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".agentflow-kimi").write_text("kimi(){ :; }\n", encoding="utf-8")
+    (home / ".profile").write_text('echo source "$HOME/.agentflow-kimi"\n', encoding="utf-8")
+    target = {
+        "kind": "local",
+        "shell": "bash",
+        "shell_login": True,
+        "shell_init": ["command -v kimi >/dev/null 2>&1", "kimi"],
+    }
+
+    assert kimi_shell_init_requires_interactive_bash_warning(target, home=home) == (
+        "`shell_init: kimi` uses bash without interactive startup; helpers from `~/.bashrc` are usually "
+        "unavailable. Set `target.shell_interactive: true` or use `bash -lic`."
+    )
+
+
 def test_shell_init_exports_env_var_detects_exported_provider_key():
     assert shell_init_exports_env_var(["export ANTHROPIC_API_KEY=test-shell-key"], "ANTHROPIC_API_KEY") is True
 
@@ -562,6 +582,25 @@ def test_target_bash_login_startup_chain_includes_bashrc_bridge(tmp_path: Path, 
     }
 
     assert target_bash_login_startup_chain(target) == ("~/.bash_profile", "~/.profile", "~/.bashrc")
+
+
+def test_target_bash_login_startup_chain_ignores_echoed_source_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('echo source ~/.bashrc\n', encoding="utf-8")
+
+    monkeypatch.setattr("agentflow.local_shell.Path.home", lambda: home)
+
+    target = {
+        "kind": "local",
+        "shell": "bash",
+        "shell_login": True,
+    }
+
+    assert target_bash_login_startup_chain(target) == ("~/.profile",)
 
 
 @pytest.mark.parametrize(

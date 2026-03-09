@@ -393,9 +393,22 @@ def _iter_shell_source_targets(text: str) -> tuple[str, ...]:
             tokens = shlex.split(line, posix=True)
         except ValueError:
             tokens = line.split()
-        for index, token in enumerate(tokens[:-1]):
-            if token in {"source", "."}:
-                targets.append(tokens[index + 1])
+        expects_command = True
+        for index, token in enumerate(tokens):
+            if expects_command:
+                if _token_resets_command_position(token):
+                    continue
+                if _looks_like_env_assignment(token) or token in _COMMAND_POSITION_PREFIX_TOKENS:
+                    continue
+                if token in {"source", "."}:
+                    if index + 1 < len(tokens):
+                        targets.append(tokens[index + 1])
+                    expects_command = False
+                    continue
+                expects_command = False
+
+            if _token_resets_command_position(token):
+                expects_command = True
     return tuple(targets)
 
 
