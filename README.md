@@ -226,6 +226,8 @@ Each node supports:
 - `retries` and `retry_backoff_seconds`
 - `success_criteria`: output or filesystem checks evaluated after execution
 
+Skill entries are resolved from the pipeline `working_dir`. You can point `skills:` at a plain file, a `.md` file, or a directory that contains `SKILL.md`, which keeps reusable local skill bundles easy to share across Codex, Claude, and Kimi nodes.
+
 Top-level pipeline controls include:
 
 - `concurrency`: max parallel nodes within a run
@@ -290,6 +292,25 @@ nodes:
 ```
 
 AgentFlow applies `local_target_defaults` to local nodes that omit `target`, merges it into local nodes that only override part of `target`, and leaves container or Lambda targets unchanged. If you prefer to spell the wrapper directly, explicit shells such as `bash -lic` behave the same way, and AgentFlow suppresses Bash's harmless no-job-control stderr noise for those interactive wrappers too. If your login shell uses `~/.bash_profile`, make sure it eventually reaches `~/.bashrc`, either directly or via another startup file such as `~/.profile`; otherwise Bash only reads `~/.profile` when no `~/.bash_profile` or `~/.bash_login` file is present. A minimal bridge looks like:
+
+If one local node should not inherit the shared Kimi preset, set `target.bootstrap: null` on that node. AgentFlow now treats that as an explicit opt-out from the inherited bootstrap while still preserving unrelated local defaults such as `cwd`.
+
+```yaml
+local_target_defaults:
+  bootstrap: kimi
+  cwd: workspace
+
+nodes:
+  - id: codex_plan
+    agent: codex
+    prompt: Reply with exactly: codex ok
+
+  - id: codex_direct
+    agent: codex
+    prompt: Reply with exactly: direct ok
+    target:
+      bootstrap: null
+```
 
 ```bash
 # ~/.bash_profile or ~/.profile
