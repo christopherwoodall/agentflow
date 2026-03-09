@@ -117,6 +117,17 @@ def _bash_startup_context(summary: str) -> dict[str, object]:
     return {"startup_summary": summary}
 
 
+def _disable_local_readiness_probes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(agentflow.cli, "build_pipeline_local_kimi_readiness_checks", lambda pipeline: [])
+    monkeypatch.setattr(agentflow.cli, "build_pipeline_local_claude_readiness_checks", lambda pipeline: [])
+    monkeypatch.setattr(agentflow.cli, "build_pipeline_local_codex_readiness_checks", lambda pipeline: [])
+    monkeypatch.setattr(agentflow.cli, "build_pipeline_local_codex_auth_checks", lambda pipeline: [])
+    monkeypatch.setattr(agentflow.cli, "build_pipeline_local_kimi_readiness_info_checks", lambda pipeline: [])
+    monkeypatch.setattr(agentflow.cli, "build_pipeline_local_claude_readiness_info_checks", lambda pipeline: [])
+    monkeypatch.setattr(agentflow.cli, "build_pipeline_local_codex_readiness_info_checks", lambda pipeline: [])
+    monkeypatch.setattr(agentflow.cli, "build_pipeline_local_codex_auth_info_checks", lambda pipeline: [])
+
+
 def _completed_run(
     run_id: str,
     *,
@@ -7912,6 +7923,52 @@ def test_doctor_shell_bridge_summary_reports_when_no_fix_is_needed(monkeypatch):
     assert result.stdout == "Doctor: ok\n- kimi_shell_helper: ok - ready\nShell bridge suggestion: not needed\n"
 
 
+def test_doctor_with_pipeline_path_uses_pipeline_shell_bridge_for_custom_home(tmp_path, monkeypatch):
+    host_home = tmp_path / "host-home"
+    host_home.mkdir()
+    (host_home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (host_home / ".bashrc").write_text("export PATH=\"$HOME/bin:$PATH\"\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(host_home))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _disable_local_readiness_probes(monkeypatch)
+
+    custom_home = tmp_path / "custom-home"
+    custom_home.mkdir()
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        f"""name: doctor-custom-home-shell-bridge
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    provider: anthropic
+    prompt: hi
+    target:
+      kind: local
+      shell: "env HOME={custom_home} bash"
+      shell_login: true
+      shell_interactive: true
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["doctor", str(pipeline_path), "--output", "json", "--shell-bridge"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["shell_bridge"] == build_bash_login_shell_bridge_recommendation(home=custom_home).as_dict()
+    assert payload["checks"] == [
+        {
+            "name": "provider_credentials",
+            "status": "failed",
+            "detail": (
+                "Node `review` (claude) requires `ANTHROPIC_API_KEY` for provider `anthropic`, but it is not set "
+                "in the current environment, `node.env`, or `provider.env`."
+            ),
+        }
+    ]
+
+
 def test_doctor_command_does_not_import_web_stack(monkeypatch):
     repo_root = Path(__file__).resolve().parents[1]
     script = """
@@ -8030,6 +8087,59 @@ def test_smoke_failed_preflight_includes_shell_bridge_when_available(monkeypatch
         "if [ -f \"$HOME/.profile\" ]; then\n"
         "  . \"$HOME/.profile\"\n"
         "fi\n"
+    )
+
+
+def test_smoke_failed_preflight_uses_pipeline_shell_bridge_for_custom_home(tmp_path, monkeypatch):
+    host_home = tmp_path / "host-home"
+    host_home.mkdir()
+    (host_home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (host_home / ".bashrc").write_text("export PATH=\"$HOME/bin:$PATH\"\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(host_home))
+    _reject_bundled_smoke_doctor(monkeypatch)
+    _disable_local_readiness_probes(monkeypatch)
+    monkeypatch.setattr(
+        agentflow.cli,
+        "build_local_kimi_bootstrap_doctor_report",
+        lambda: DoctorReport(
+            status="failed",
+            checks=[DoctorCheck(name="kimi_shell_helper", status="failed", detail="broken helper")],
+        ),
+    )
+
+    custom_home = tmp_path / "custom-home"
+    custom_home.mkdir()
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        f"""name: smoke-custom-home-shell-bridge
+working_dir: .
+nodes:
+  - id: codex_plan
+    agent: codex
+    prompt: hi
+    target:
+      kind: local
+      bootstrap: kimi
+      shell: "env HOME={custom_home} bash"
+      shell_login: true
+      shell_interactive: true
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["smoke", str(pipeline_path)])
+
+    assert result.exit_code == 1
+    recommendation = build_bash_login_shell_bridge_recommendation(home=custom_home)
+    assert recommendation is not None
+    assert result.stdout == (
+        "Doctor: failed\n"
+        "- kimi_shell_helper: failed - broken helper\n"
+        f"Pipeline auto preflight: enabled - local Codex/Claude/Kimi nodes use a `kimi` shell bootstrap.\n"
+        f"Pipeline auto preflight matches: codex_plan (codex) via `target.bootstrap`\n"
+        f"Shell bridge suggestion for `{recommendation.target}` from `{recommendation.source}`:\n"
+        f"Reason: {recommendation.reason}\n"
+        f"{recommendation.snippet}"
     )
 
 

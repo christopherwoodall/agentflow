@@ -17,6 +17,7 @@ from agentflow.defaults import default_smoke_pipeline_path
 from agentflow.doctor import (
     DoctorCheck,
     DoctorReport,
+    ShellBridgeRecommendation,
     build_bash_login_shell_bridge_recommendation,
     build_local_kimi_bootstrap_doctor_report,
     build_pipeline_local_claude_readiness_checks,
@@ -490,6 +491,36 @@ def _pipeline_launch_inspection_nodes(pipeline: object) -> list[dict[str, object
     return [node for node in nodes if isinstance(node, dict)]
 
 
+def _shell_bridge_recommendation_from_payload(payload: object) -> ShellBridgeRecommendation | None:
+    if not isinstance(payload, dict):
+        return None
+
+    target = payload.get("target")
+    source = payload.get("source")
+    snippet = payload.get("snippet")
+    reason = payload.get("reason")
+    if not all(isinstance(value, str) and value for value in (target, source, snippet, reason)):
+        return None
+
+    return ShellBridgeRecommendation(
+        target=target,
+        source=source,
+        snippet=snippet,
+        reason=reason,
+    )
+
+
+def _pipeline_shell_bridge_recommendation(pipeline: object | None) -> ShellBridgeRecommendation | None:
+    if pipeline is None:
+        return None
+
+    for node in _pipeline_launch_inspection_nodes(pipeline):
+        recommendation = _shell_bridge_recommendation_from_payload(node.get("shell_bridge"))
+        if recommendation is not None:
+            return recommendation
+    return None
+
+
 def _pipeline_launch_env_override_checks(nodes: list[dict[str, object]]) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
     for node in nodes:
@@ -654,7 +685,15 @@ def _doctor_report_for_path(path: str | None = None) -> tuple[object, dict[str, 
     )
 
 
-def _preflight_shell_bridge_recommendation(report: object) -> object | None:
+def _preflight_shell_bridge_recommendation(
+    report: object,
+    *,
+    pipeline: object | None = None,
+) -> ShellBridgeRecommendation | None:
+    pipeline_recommendation = _pipeline_shell_bridge_recommendation(pipeline)
+    if pipeline_recommendation is not None:
+        return pipeline_recommendation
+
     for check in getattr(report, "checks", []) or []:
         if getattr(check, "name", None) != "bash_login_startup":
             continue
@@ -664,11 +703,16 @@ def _preflight_shell_bridge_recommendation(report: object) -> object | None:
     return None
 
 
-def _doctor_shell_bridge_output(report: object, *, requested: bool) -> tuple[bool, object | None]:
+def _doctor_shell_bridge_output(
+    report: object,
+    *,
+    requested: bool,
+    pipeline: object | None = None,
+) -> tuple[bool, ShellBridgeRecommendation | None]:
     if requested:
-        return True, build_bash_login_shell_bridge_recommendation()
+        return True, _pipeline_shell_bridge_recommendation(pipeline) or build_bash_login_shell_bridge_recommendation()
 
-    recommendation = _preflight_shell_bridge_recommendation(report)
+    recommendation = _preflight_shell_bridge_recommendation(report, pipeline=pipeline)
     return recommendation is not None, recommendation
 
 
@@ -1240,7 +1284,7 @@ def _load_pipeline_with_optional_smoke_preflight(
             preflight_pipeline = _load_pipeline(selected_path)
             report = _augment_preflight_report(report, preflight_pipeline)
         doctor_output = _structured_output_from_run_output(output)
-        shell_bridge = _preflight_shell_bridge_recommendation(report)
+        shell_bridge = _preflight_shell_bridge_recommendation(report, pipeline=preflight_pipeline)
         include_shell_bridge = shell_bridge is not None
         preflight_context = None
         if preflight_pipeline is not None:
@@ -1632,7 +1676,11 @@ def check_local(
 ) -> None:
     selected_path = path or default_smoke_pipeline_path()
     report, pipeline, _loaded_pipeline = _doctor_report_for_path(selected_path)
-    include_shell_bridge, recommendation = _doctor_shell_bridge_output(report, requested=shell_bridge)
+    include_shell_bridge, recommendation = _doctor_shell_bridge_output(
+        report,
+        requested=shell_bridge,
+        pipeline=_loaded_pipeline,
+    )
     doctor_output = _structured_output_from_run_output(output)
     _echo_doctor_report(
         report,
@@ -1665,7 +1713,11 @@ def doctor(
     ),
 ) -> None:
     report, pipeline, _loaded_pipeline = _doctor_report_for_path(path)
-    include_shell_bridge, recommendation = _doctor_shell_bridge_output(report, requested=shell_bridge)
+    include_shell_bridge, recommendation = _doctor_shell_bridge_output(
+        report,
+        requested=shell_bridge,
+        pipeline=_loaded_pipeline,
+    )
     _echo_doctor_report(
         report,
         output=output,
