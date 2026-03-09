@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 import agentflow.cli
 import agentflow.local_shell
+from agentflow.agents.kimi import default_kimi_executable
 from agentflow.cli import app, _render_doctor_summary
 from agentflow.doctor import (
     DoctorCheck,
@@ -18,6 +19,7 @@ from agentflow.doctor import (
     ShellBridgeRecommendation,
     build_bash_login_shell_bridge_recommendation,
 )
+from agentflow.prepared import ExecutionPaths
 from agentflow.specs import ProviderConfig
 
 runner = CliRunner()
@@ -115,6 +117,19 @@ def _shell_bridge_recommendation() -> ShellBridgeRecommendation:
 
 def _bash_startup_context(summary: str) -> dict[str, object]:
     return {"startup_summary": summary}
+
+
+def _expected_default_kimi_python() -> str:
+    repo_root = Path(__file__).resolve().parents[1]
+    return default_kimi_executable(
+        ExecutionPaths(
+            host_workdir=repo_root,
+            host_runtime_dir=repo_root / ".agentflow" / "test-runtime",
+            target_workdir=str(repo_root),
+            target_runtime_dir=str(repo_root / ".agentflow" / "test-runtime"),
+            app_root=repo_root,
+        )
+    )
 
 
 def _disable_local_readiness_probes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -7071,7 +7086,7 @@ def test_doctor_with_pipeline_path_accepts_provider_credentials_from_interactive
 
 def test_doctor_with_pipeline_path_accepts_kimi_api_key_from_node_env(monkeypatch):
     captured: dict[str, object] = {}
-    expected_python = sys.executable
+    expected_python = _expected_default_kimi_python()
 
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
     monkeypatch.setattr(subprocess, "run", _completed_subprocess())
