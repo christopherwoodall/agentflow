@@ -4867,6 +4867,94 @@ def test_smoke_uses_bundled_pipeline_by_default(monkeypatch):
     assert captured["wait_timeout"] is None
 
 
+def test_render_run_summary_includes_provider_account_diagnosis_for_api_errors():
+    record = _completed_run(
+        "smoke-provider-error",
+        pipeline_name="local-real-agents-kimi-smoke",
+        status="failed",
+        pipeline_nodes=[
+            SimpleNamespace(
+                id="claude_review",
+                agent=SimpleNamespace(value="claude"),
+                model=None,
+                provider="kimi",
+            )
+        ],
+        nodes={
+            "claude_review": SimpleNamespace(
+                status=SimpleNamespace(value="failed"),
+                current_attempt=1,
+                attempts=[SimpleNamespace(number=1)],
+                exit_code=1,
+                final_response='API Error: 402 {"error":{"type":"invalid_request_error","message":"membership required"}}',
+                output='API Error: 402 {"error":{"type":"invalid_request_error","message":"membership required"}}',
+                stderr_lines=[],
+                stdout_lines=[],
+            )
+        },
+    )
+
+    rendered = agentflow.cli._render_run_summary(record, run_dir=".agentflow/runs/smoke-provider-error")
+
+    assert "Run smoke-provider-error: failed" in rendered
+    assert (
+        "- claude_review [claude, provider=kimi]: failed (attempt 1, exit 1) - "
+        'API Error: 402 {"error":{"type":"invalid_request_error","message":"membership required"}}'
+    ) in rendered
+    assert (
+        "  Diagnosis: Claude-on-Kimi reached the provider, but the request was rejected with a "
+        "membership/billing-style API error. The local shell bootstrap is likely working; "
+        "check the upstream provider account state."
+    ) in rendered
+
+
+def test_build_run_summary_includes_provider_account_diagnosis_for_api_errors():
+    record = _completed_run(
+        "smoke-provider-error-json",
+        pipeline_name="local-real-agents-kimi-smoke",
+        status="failed",
+        pipeline_nodes=[
+            SimpleNamespace(
+                id="claude_review",
+                agent=SimpleNamespace(value="claude"),
+                model=None,
+                provider="kimi",
+            )
+        ],
+        nodes={
+            "claude_review": SimpleNamespace(
+                status=SimpleNamespace(value="failed"),
+                current_attempt=1,
+                attempts=[SimpleNamespace(number=1)],
+                exit_code=1,
+                final_response='API Error: 402 {"error":{"type":"invalid_request_error","message":"membership required"}}',
+                output='API Error: 402 {"error":{"type":"invalid_request_error","message":"membership required"}}',
+                stderr_lines=[],
+                stdout_lines=[],
+            )
+        },
+    )
+
+    summary = agentflow.cli._build_run_summary(record, run_dir=".agentflow/runs/smoke-provider-error-json")
+
+    assert summary["nodes"] == [
+        {
+            "id": "claude_review",
+            "status": "failed",
+            "agent": "claude",
+            "provider": "kimi",
+            "attempts": 1,
+            "exit_code": 1,
+            "preview": 'API Error: 402 {"error":{"type":"invalid_request_error","message":"membership required"}}',
+            "diagnosis": (
+                "Claude-on-Kimi reached the provider, but the request was rejected with a "
+                "membership/billing-style API error. The local shell bootstrap is likely working; "
+                "check the upstream provider account state."
+            ),
+        }
+    ]
+
+
 def test_check_local_uses_bundled_pipeline_by_default(monkeypatch):
     captured: dict[str, object] = {}
 

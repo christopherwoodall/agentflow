@@ -237,6 +237,53 @@ def _node_identity(node_id: str, pipeline_node: object | None) -> str:
     return f"{node_id} [{', '.join(parts)}]"
 
 
+def _node_text_candidates(node: object) -> list[str]:
+    candidates: list[str] = []
+    for value in (getattr(node, "final_response", None), getattr(node, "output", None)):
+        if isinstance(value, str) and value.strip():
+            candidates.append(value)
+    for stream_name in ("stderr_lines", "stdout_lines"):
+        for line in getattr(node, stream_name, []) or []:
+            if isinstance(line, str) and line.strip():
+                candidates.append(line)
+    return candidates
+
+
+def _provider_error_subject(pipeline_node: object | None) -> str:
+    agent_value = getattr(pipeline_node, "agent", None)
+    agent_name = _status_value(agent_value).strip().lower() if agent_value is not None else ""
+    provider_name = (_provider_name(getattr(pipeline_node, "provider", None)) or "").strip().lower()
+
+    if agent_name == "claude" and provider_name == "kimi":
+        return "Claude-on-Kimi"
+    if agent_name == "codex":
+        return "Codex"
+    if agent_name == "claude":
+        return "Claude"
+    if agent_name == "kimi":
+        return "Kimi"
+    return "The agent"
+
+
+def _provider_error_diagnosis(node: object, pipeline_node: object | None) -> str | None:
+    combined = "\n".join(_node_text_candidates(node))
+    if "API Error:" not in combined:
+        return None
+
+    lowered = combined.lower()
+    subject = _provider_error_subject(pipeline_node)
+    if any(marker in lowered for marker in ("api error: 402", "membership", "benefits", "billing", "credits", "quota")):
+        return (
+            f"{subject} reached the provider, but the request was rejected with a "
+            "membership/billing-style API error. The local shell bootstrap is likely working; "
+            "check the upstream provider account state."
+        )
+    return (
+        f"{subject} reached the provider, but the request was rejected upstream. "
+        "The local shell bootstrap is likely working; inspect the raw API error above."
+    )
+
+
 def _node_preview(node: object) -> str | None:
     for candidate in (getattr(node, "final_response", None), getattr(node, "output", None)):
         preview = _preview_text(candidate)
@@ -299,6 +346,9 @@ def _build_run_summary(record: object, run_dir: Path | str | None = None) -> dic
         preview = _node_preview(node)
         if preview is not None:
             node_summary["preview"] = preview
+        diagnosis = _provider_error_diagnosis(node, pipeline_node)
+        if diagnosis is not None:
+            node_summary["diagnosis"] = diagnosis
         nodes.append(node_summary)
 
     summary["nodes"] = nodes
@@ -347,6 +397,9 @@ def _render_run_summary(record: object, run_dir: Path | str | None = None) -> st
             if preview is not None:
                 rendered += f" - {preview}"
             lines.append(f"- {rendered}")
+            diagnosis = node.get("diagnosis")
+            if diagnosis:
+                lines.append(f"  Diagnosis: {diagnosis}")
     return "\n".join(lines)
 
 
