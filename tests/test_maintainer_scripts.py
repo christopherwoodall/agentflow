@@ -243,10 +243,30 @@ def test_make_help_verify_local_mentions_bundled_run_local() -> None:
     assert (
         "verify-local  Run the full local Codex + Claude-on-Kimi verification stack across bundled "
         "bootstrap/shell_init/target.shell inspect/doctor/smoke/run/check-local coverage, bundled "
-        "toolchain-local"
+        "toolchain-local, the live Claude-on-Kimi probe"
     ) in completed.stdout
     assert (
         "run-local     Run the bundled local Codex + Claude-on-Kimi pipeline through `agentflow run`"
+    ) in completed.stdout
+    assert completed.stderr == ""
+
+
+def test_make_help_mentions_probe_claude_local_target() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+
+    completed = subprocess.run(
+        ["make", "-s", "help"],
+        capture_output=True,
+        cwd=repo_root,
+        env=os.environ,
+        text=True,
+        timeout=5,
+    )
+
+    assert completed.returncode == 0
+    assert (
+        "probe-claude-local Run a minimal live Claude-on-Kimi request through the local bash + kimi "
+        "bootstrap and preserve provider-side errors"
     ) in completed.stdout
     assert completed.stderr == ""
 
@@ -871,6 +891,7 @@ def test_verify_local_kimi_stack_script_runs_steps_in_expected_order(tmp_path: P
 
     for script_name in (
         "verify-local-kimi-shell.sh",
+        "verify-local-kimi-claude-live.sh",
         "verify-bundled-local-kimi-run.sh",
         "verify-custom-local-kimi-doctor.sh",
         "verify-custom-local-kimi-inspect.sh",
@@ -904,6 +925,7 @@ def test_verify_local_kimi_stack_script_runs_steps_in_expected_order(tmp_path: P
     assert log_path.read_text(encoding="utf-8").splitlines() == [
         "verify-local-kimi-shell.sh mode=",
         "agentflow:toolchain-local --output summary",
+        "verify-local-kimi-claude-live.sh mode=",
         f"agentflow:inspect {bundled_smoke_pipeline} --output summary",
         f"agentflow:doctor {bundled_smoke_pipeline} --output summary",
         f"agentflow:smoke {bundled_smoke_pipeline} --output summary",
@@ -932,7 +954,7 @@ def test_verify_local_kimi_stack_script_runs_steps_in_expected_order(tmp_path: P
         "verify-custom-local-kimi-run.sh mode=shell-init",
         "verify-custom-local-kimi-run.sh mode=shell-wrapper",
     ]
-    assert completed.stdout.count("== ") == 29
+    assert completed.stdout.count("== ") == 30
     assert "== Shell toolchain ==" in completed.stdout
     assert "== Bundled toolchain-local ==" in completed.stdout
     assert "== Bundled inspect-local ==" in completed.stdout
@@ -948,4 +970,5 @@ def test_verify_local_kimi_stack_script_runs_steps_in_expected_order(tmp_path: P
     assert "== Bundled smoke-local (target.shell) ==" in completed.stdout
     assert "== Bundled run-local (target.shell) ==" in completed.stdout
     assert "== Bundled check-local (target.shell) ==" in completed.stdout
+    assert "== Claude-on-Kimi live probe ==" in completed.stdout
     assert "== External custom run (target.shell) ==" in completed.stdout
