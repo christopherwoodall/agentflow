@@ -13,6 +13,7 @@ from agentflow.dsl import (
     fanout_values_path,
     kimi,
 )
+from agentflow.fuzz import codex_fuzz_campaign_matrix, codex_fuzz_campaign_preset_names
 
 
 def create_app(*args, **kwargs):
@@ -25,6 +26,8 @@ __all__ = [
     "DAG",
     "claude",
     "codex",
+    "codex_fuzz_campaign_matrix",
+    "codex_fuzz_campaign_preset_names",
     "fanout_batches",
     "fanout_count",
     "fanout_group_by",

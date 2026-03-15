@@ -2,10 +2,14 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 from agentflow import (
     DAG,
     claude,
     codex,
+    codex_fuzz_campaign_matrix,
+    codex_fuzz_campaign_preset_names,
     fanout_batches,
     fanout_count,
     fanout_group_by,
@@ -242,6 +246,88 @@ def test_airflow_like_dag_supports_grouped_fanout_helpers():
     assert nodes["merge"].depends_on == ["family_merge_0", "family_merge_1"]
 
 
+def test_codex_fuzz_campaign_helpers_build_preset_backed_matrix_payload():
+    payload = codex_fuzz_campaign_matrix(
+        preset="browser-surface",
+        bucket_count=2,
+        as_="shard",
+        label_template="{{ shard.target }} :: {{ shard.bucket }}",
+        derive={"campaign": "browser"},
+        extra_axes={"lane": [{"lane": "dom"}]},
+    )
+
+    assert codex_fuzz_campaign_preset_names() == ("oss-fuzz-core", "browser-surface", "protocol-stack")
+    assert payload["as"] == "shard"
+    assert payload["matrix"]["family"][0] == {"target": "blink", "corpus": "html"}
+    assert payload["matrix"]["strategy"][0] == {"sanitizer": "asan", "focus": "parser"}
+    assert payload["matrix"]["seed_bucket"] == [
+        {"bucket": "seed_001", "seed": 4101},
+        {"bucket": "seed_002", "seed": 4102},
+    ]
+    assert payload["matrix"]["lane"] == [{"lane": "dom"}]
+    assert payload["derive"]["label"] == "{{ shard.target }} :: {{ shard.bucket }}"
+    assert payload["derive"]["workspace"] == "agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.bucket }}_{{ shard.suffix }}"
+    assert payload["derive"]["campaign"] == "browser"
+
+
+def test_codex_fuzz_campaign_helper_rejects_unknown_preset():
+    with pytest.raises(ValueError, match=r"`preset` must be one of"):
+        codex_fuzz_campaign_matrix(preset="missing-preset")
+
+
+def test_airflow_like_dag_supports_codex_fuzz_campaign_matrix_helper():
+    with DAG(
+        "preset-fuzz",
+        working_dir="/tmp/preset-fuzz",
+        concurrency=8,
+        node_defaults={
+            "agent": "codex",
+            "tools": "read_only",
+        },
+        agent_defaults={
+            "codex": {
+                "model": "gpt-5-codex",
+                "extra_args": ["--search"],
+            }
+        },
+    ) as dag:
+        init = codex(task_id="init", prompt="init", tools="read_write")
+        fuzzer = codex(
+            task_id="fuzzer",
+            prompt="fuzz {{ shard.label }} in {{ shard.workspace }}",
+            fanout=codex_fuzz_campaign_matrix(
+                preset="browser-surface",
+                bucket_count=2,
+                as_="shard",
+            ),
+            target={"cwd": "{{ shard.workspace }}"},
+        )
+        batch_merge = codex(
+            task_id="batch_merge",
+            prompt="reduce {{ current.member_ids | join(', ') }}",
+            fanout=fanout_batches("fuzzer", 4, as_="batch"),
+        )
+        merge = codex(task_id="merge", prompt="merge")
+        init >> fuzzer
+        fuzzer >> batch_merge
+        batch_merge >> merge
+
+    spec = dag.to_spec()
+    nodes = spec.node_map
+
+    assert len(spec.fanouts["fuzzer"]) == 32
+    assert spec.fanouts["fuzzer"][:3] == ["fuzzer_00", "fuzzer_01", "fuzzer_02"]
+    assert spec.fanouts["fuzzer"][-1] == "fuzzer_31"
+    assert len(spec.fanouts["batch_merge"]) == 8
+    assert nodes["fuzzer_00"].fanout_member["target"] == "blink"
+    assert nodes["fuzzer_00"].fanout_member["label"] == "blink / asan / parser / seed_001"
+    assert nodes["fuzzer_00"].target.cwd == "agents/blink_asan_seed_001_00"
+    assert nodes["fuzzer_15"].fanout_member["target"] == "v8"
+    assert nodes["fuzzer_15"].fanout_member["bucket"] == "seed_002"
+    assert nodes["batch_merge_0"].depends_on == spec.fanouts["fuzzer"][:4]
+    assert nodes["merge"].depends_on == spec.fanouts["batch_merge"]
+
+
 def test_airflow_like_dag_can_render_json_and_yaml():
     with DAG(
         "render-demo",
@@ -394,6 +480,32 @@ def test_airflow_like_fuzz_catalog_batched_example_emits_valid_pipeline():
     assert len(spec.fanouts["batch_merge"]) == 8
     assert spec.node_map["fuzzer_000"].target.cwd.endswith(
         "/codex_fuzz_python_catalog_batched_128/agents/libpng_asan_seed_001_000"
+    )
+    assert spec.node_map["batch_merge_0"].depends_on == spec.fanouts["fuzzer"][:16]
+    assert spec.node_map["merge"].depends_on == spec.fanouts["batch_merge"]
+
+
+def test_airflow_like_fuzz_preset_batched_example_emits_valid_pipeline():
+    repo_root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [sys.executable, str(repo_root / "examples" / "airflow_like_fuzz_preset_batched.py")],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+    )
+
+    spec = load_pipeline_from_text(completed.stdout, base_dir=repo_root)
+
+    assert spec.name == "airflow-like-fuzz-preset-batched-128"
+    assert spec.fail_fast is True
+    assert spec.concurrency == 32
+    assert len(spec.fanouts["fuzzer"]) == 128
+    assert len(spec.fanouts["batch_merge"]) == 8
+    assert spec.node_map["fuzzer_000"].fanout_member["target"] == "blink"
+    assert spec.node_map["fuzzer_000"].fanout_member["label"] == "blink / asan / parser / seed_001"
+    assert spec.node_map["fuzzer_000"].target.cwd.endswith(
+        "/codex_fuzz_python_preset_batched_128/agents/blink_asan_seed_001_000"
     )
     assert spec.node_map["batch_merge_0"].depends_on == spec.fanouts["fuzzer"][:16]
     assert spec.node_map["merge"].depends_on == spec.fanouts["batch_merge"]

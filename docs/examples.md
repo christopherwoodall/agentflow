@@ -32,6 +32,7 @@ The fixed `*-128` examples are reference snapshots when you want to inspect a fu
 | --- | --- | --- |
 | `airflow_like.py` | You want the smallest Python-authored DAG reference. | Static dependencies with `plan >> [implement, review]`. |
 | `airflow_like_fuzz_batched.py` | You want a 128-shard Codex swarm authored from Python instead of YAML templates. | `DAG(node_defaults=..., agent_defaults=..., fail_fast=...)`, `fanout_count(...)`, `fanout_batches(...)`, `dag.to_yaml()`. |
+| `airflow_like_fuzz_preset_batched.py` | You want a preset-backed 128-shard Codex campaign from Python without rewriting the full matrix axes. | `codex_fuzz_campaign_matrix(...)`, built-in `browser-surface` roster, `fanout_batches(...)`, `dag.to_yaml()`. |
 | `airflow_like_fuzz_catalog_batched.py` | You want a 128-shard Python DAG backed by a CSV shard catalog plus neutral staged reducers. | `fanout_values_path(...)`, `fanout_batches(...)`, `dag.to_yaml()`. |
 | `airflow_like_fuzz_grouped.py` | You want a 128-shard grouped Codex campaign from Python with reducer-local summaries. | `fanout_matrix(...)`, `fanout_group_by(...)`, `current.scope`. |
 
@@ -49,5 +50,6 @@ The fixed `*-128` examples are reference snapshots when you want to inspect a fu
 - Start with `codex-fuzz-swarm` for homogeneous campaigns, then move to `codex-fuzz-batched` when the final reducer becomes too large to read.
 - Use the matrix starters when shard metadata is derivable, and use the catalog starters when every shard needs explicit maintainer-owned metadata.
 - Use `agentflow template-presets` plus `--set preset=...` when you want a realistic starting roster such as `browser-surface` or `protocol-stack` before hand-tuning the generated manifests or CSV files.
+- Use `airflow_like_fuzz_preset_batched.py` when you want those same preset rosters directly from Python instead of going through a rendered YAML scaffold first.
 - Use `codex-fuzz-catalog-batched` when the catalog rows need intermediate reducers but there is no stable family field worth grouping on.
 - Prefer the manifest-backed starters when the shard roster or reducer roster should live in sidecar files that non-authors can edit.
