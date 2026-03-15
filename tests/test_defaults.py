@@ -30,6 +30,18 @@ def test_bundled_templates_expose_descriptions_and_example_files():
     assert "128-shard Codex fuzz matrix" in by_name["codex-fuzz-matrix-128"].description
     assert by_name["codex-fuzz-hierarchical-128"].example_name == "fuzz/codex-fuzz-hierarchical-128.yaml"
     assert "per-target reducers" in by_name["codex-fuzz-hierarchical-128"].description
+    assert by_name["codex-fuzz-hierarchical-manifest"].example_name == "fuzz/codex-fuzz-hierarchical-manifest.yaml"
+    assert "reducer families" in by_name["codex-fuzz-hierarchical-manifest"].description
+    assert by_name["codex-fuzz-hierarchical-manifest"].support_files == (
+        "manifests/codex-fuzz-hierarchical.axes.yaml",
+        "manifests/codex-fuzz-hierarchical.families.yaml",
+    )
+    assert tuple(parameter.name for parameter in by_name["codex-fuzz-hierarchical-manifest"].parameters) == (
+        "bucket_count",
+        "concurrency",
+        "name",
+        "working_dir",
+    )
     assert by_name["codex-fuzz-matrix-manifest"].example_name == "fuzz/codex-fuzz-matrix-manifest.yaml"
     assert "fanout.matrix_path" in by_name["codex-fuzz-matrix-manifest"].description
     assert by_name["codex-fuzz-matrix-manifest"].support_files == ("manifests/codex-fuzz-matrix.axes.yaml",)
@@ -151,6 +163,97 @@ def test_bundled_codex_fuzz_matrix_128_template_is_available():
 def test_bundled_codex_fuzz_hierarchical_128_template_is_available():
     assert "codex-fuzz-hierarchical-128" in bundled_template_names()
     assert "\nname: codex-fuzz-hierarchical-128\n" in f"\n{load_bundled_template_yaml('codex-fuzz-hierarchical-128')}"
+
+
+def test_bundled_codex_fuzz_hierarchical_manifest_template_is_available():
+    assert "codex-fuzz-hierarchical-manifest" in bundled_template_names()
+    assert "\nname: codex-fuzz-hierarchical-manifest-64\n" in f"\n{load_bundled_template_yaml('codex-fuzz-hierarchical-manifest')}"
+    assert bundled_template_support_files("codex-fuzz-hierarchical-manifest") == (
+        "manifests/codex-fuzz-hierarchical.axes.yaml",
+        "manifests/codex-fuzz-hierarchical.families.yaml",
+    )
+
+
+def test_bundled_codex_fuzz_hierarchical_manifest_template_matches_default_example_files():
+    template_dir = bundled_template_path("codex-fuzz-hierarchical-manifest").parent
+    expected_yaml = bundled_template_path("codex-fuzz-hierarchical-manifest").read_text(encoding="utf-8")
+    expected_axes = (template_dir / "manifests" / "codex-fuzz-hierarchical.axes.yaml").read_text(encoding="utf-8")
+    expected_families = (template_dir / "manifests" / "codex-fuzz-hierarchical.families.yaml").read_text(
+        encoding="utf-8"
+    )
+    rendered = render_bundled_template("codex-fuzz-hierarchical-manifest")
+
+    assert rendered.yaml == expected_yaml
+    assert len(rendered.support_files) == 2
+    assert rendered.support_files[0].relative_path == "manifests/codex-fuzz-hierarchical.axes.yaml"
+    assert rendered.support_files[0].content == expected_axes
+    assert rendered.support_files[1].relative_path == "manifests/codex-fuzz-hierarchical.families.yaml"
+    assert rendered.support_files[1].content == expected_families
+
+
+def test_bundled_codex_fuzz_hierarchical_manifest_template_accepts_overrides_and_renders_support_files(tmp_path):
+    rendered = render_bundled_template(
+        "codex-fuzz-hierarchical-manifest",
+        values={
+            "bucket_count": "8",
+            "concurrency": "32",
+            "name": "custom-hierarchical-manifest-128",
+            "working_dir": "./custom_hierarchical_manifest",
+        },
+    )
+
+    assert "name: custom-hierarchical-manifest-128\n" in rendered.yaml
+    assert "working_dir: ./custom_hierarchical_manifest\n" in rendered.yaml
+    assert "concurrency: 32\n" in rendered.yaml
+    assert "matrix_path: manifests/codex-fuzz-hierarchical.axes.yaml" in rendered.yaml
+    assert "values_path: manifests/codex-fuzz-hierarchical.families.yaml" in rendered.yaml
+    assert len(rendered.support_files) == 2
+    assert rendered.support_files[0].relative_path == "manifests/codex-fuzz-hierarchical.axes.yaml"
+    assert rendered.support_files[1].relative_path == "manifests/codex-fuzz-hierarchical.families.yaml"
+    rendered_axes = rendered.support_files[0].content.strip().splitlines()
+    assert rendered_axes[:4] == ["family:", "  - target: libpng", "    corpus: png", "  - target: libjpeg"]
+    assert rendered_axes[-4:] == ["  - bucket: seed_007", "    seed: 4107", "  - bucket: seed_008", "    seed: 4108"]
+    assert rendered.support_files[1].content.strip().splitlines() == [
+        "- target: libpng",
+        "  corpus: png",
+        "- target: libjpeg",
+        "  corpus: jpeg",
+        "- target: freetype",
+        "  corpus: fonts",
+        "- target: sqlite",
+        "  corpus: sql",
+    ]
+
+    pipeline_path = tmp_path / "custom-hierarchical.yaml"
+    pipeline_path.write_text(rendered.yaml, encoding="utf-8")
+    for support_file in rendered.support_files:
+        support_path = tmp_path / support_file.relative_path
+        support_path.parent.mkdir(parents=True, exist_ok=True)
+        support_path.write_text(support_file.content, encoding="utf-8")
+    pipeline = load_pipeline_from_path(str(pipeline_path))
+
+    assert pipeline.concurrency == 32
+    assert len(pipeline.fanouts["fuzzer"]) == 128
+    assert pipeline.fanouts["fuzzer"][:3] == ["fuzzer_000", "fuzzer_001", "fuzzer_002"]
+    assert pipeline.fanouts["fuzzer"][-1] == "fuzzer_127"
+    assert pipeline.node_map["fuzzer_000"].fanout_member["label"] == "libpng / asan / parser / seed_001"
+    assert pipeline.node_map["fuzzer_000"].target.cwd.endswith(
+        "custom_hierarchical_manifest/agents/libpng_asan_seed_001_000"
+    )
+    assert pipeline.fanouts["family_merge"] == [
+        "family_merge_0",
+        "family_merge_1",
+        "family_merge_2",
+        "family_merge_3",
+    ]
+    assert pipeline.node_map["family_merge_0"].fanout_member["target"] == "libpng"
+    assert pipeline.node_map["family_merge_3"].fanout_member["target"] == "sqlite"
+    assert pipeline.node_map["merge"].depends_on == [
+        "family_merge_0",
+        "family_merge_1",
+        "family_merge_2",
+        "family_merge_3",
+    ]
 
 
 def test_bundled_codex_fuzz_matrix_manifest_template_is_available():
@@ -428,6 +531,36 @@ def test_bundled_codex_fuzz_hierarchical_128_pipeline_expands_into_hierarchical_
     assert "family.target" not in pipeline.node_map["family_merge_0"].prompt
     assert pipeline.node_map["family_merge_0"].depends_on[0] == "fuzzer_000"
     assert pipeline.node_map["family_merge_0"].depends_on[-1] == "fuzzer_127"
+    assert pipeline.node_map["merge"].depends_on == [
+        "family_merge_0",
+        "family_merge_1",
+        "family_merge_2",
+        "family_merge_3",
+    ]
+
+
+def test_bundled_codex_fuzz_hierarchical_manifest_pipeline_expands_into_hierarchical_reducers():
+    pipeline = load_pipeline_from_path(str(bundled_template_path("codex-fuzz-hierarchical-manifest")))
+
+    assert pipeline.concurrency == 16
+    assert len(pipeline.fanouts["fuzzer"]) == 64
+    assert pipeline.fanouts["fuzzer"][:3] == ["fuzzer_00", "fuzzer_01", "fuzzer_02"]
+    assert pipeline.fanouts["fuzzer"][-1] == "fuzzer_63"
+    assert pipeline.node_map["fuzzer_00"].fanout_member["target"] == "libpng"
+    assert pipeline.node_map["fuzzer_00"].fanout_member["workspace"] == "agents/libpng_asan_seed_001_00"
+    assert len(pipeline.fanouts["family_merge"]) == 4
+    assert pipeline.fanouts["family_merge"] == [
+        "family_merge_0",
+        "family_merge_1",
+        "family_merge_2",
+        "family_merge_3",
+    ]
+    assert pipeline.node_map["family_merge_0"].fanout_member["target"] == "libpng"
+    assert pipeline.node_map["family_merge_3"].fanout_member["target"] == "sqlite"
+    assert '{% set target = "libpng" %}' in pipeline.node_map["family_merge_0"].prompt
+    assert "family.target" not in pipeline.node_map["family_merge_0"].prompt
+    assert pipeline.node_map["family_merge_0"].depends_on[0] == "fuzzer_00"
+    assert pipeline.node_map["family_merge_0"].depends_on[-1] == "fuzzer_63"
     assert pipeline.node_map["merge"].depends_on == [
         "family_merge_0",
         "family_merge_1",
