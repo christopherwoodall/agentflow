@@ -1381,6 +1381,7 @@ class PipelineSpec(BaseModel):
     concurrency: int = Field(default=4, ge=1)
     fail_fast: bool = False
     max_iterations: int = Field(default=10, ge=1)
+    scratchboard: bool = False
     node_defaults: dict[str, Any] | None = None
     agent_defaults: dict[AgentKind, dict[str, Any]] = Field(default_factory=dict)
     local_target_defaults: LocalTarget | None = None

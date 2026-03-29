@@ -90,6 +90,7 @@ class Orchestrator:
     _run_finished: dict[str, threading.Event] = field(default_factory=dict, init=False, repr=False)
     _node_cancel_flags: dict[str, set[str]] = field(default_factory=dict, init=False, repr=False)
     _pending_node_reruns: dict[str, set[str]] = field(default_factory=dict, init=False, repr=False)
+    _scratchboards: dict[str, "Scratchboard"] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._run_slots = threading.Semaphore(self.max_concurrent_runs)
@@ -494,6 +495,21 @@ class Orchestrator:
             current_tick_started_at=periodic_tick_started_at,
         )
         paths = self._build_paths(pipeline, run_id, node_id, node.target)
+
+        # Inject scratchboard content into prompt
+        scratchboard = self._scratchboards.get(run_id)
+        if scratchboard is not None:
+            from agentflow.scratchboard import SCRATCHBOARD_FILENAME, SCRATCHBOARD_PROMPT_SUFFIX
+            sb_content = scratchboard.read()
+            # Local nodes get the real file path; remote nodes get the runtime path
+            if node.target.kind == "local":
+                sb_path = str(scratchboard.path)
+            else:
+                sb_path = f"{paths.target_runtime_dir}/{SCRATCHBOARD_FILENAME}"
+            prompt += SCRATCHBOARD_PROMPT_SUFFIX.format(
+                scratchboard_content=sb_content,
+                scratchboard_path=sb_path,
+            )
         adapter = self.adapters.get(node.agent)
         runner = self.runners.get(node.target.kind)
         parser = create_trace_parser(node.agent, node.id)
@@ -512,6 +528,10 @@ class Orchestrator:
             result.attempts.append(attempt)
             parser.start_attempt(attempt_number)
             prepared = adapter.prepare(node, prompt, paths)
+            # Inject scratchboard file into runtime_files for remote targets
+            if scratchboard is not None and node.target.kind not in ("local",):
+                from agentflow.scratchboard import SCRATCHBOARD_FILENAME
+                prepared.runtime_files[SCRATCHBOARD_FILENAME] = scratchboard.read()
             plan = runner.plan_execution(node, prepared, paths)
             await self._write_launch_artifacts(run_id, node_id, attempt_number, plan)
             await self.store.append_artifact_text(
@@ -647,6 +667,16 @@ class Orchestrator:
 
         await self.store.write_artifact_text(run_id, node_id, "output.txt", result.output or "")
         await self.store.write_artifact_json(run_id, node_id, "result.json", result.model_dump(mode="json"))
+
+        # Merge scratchboard writes from node output
+        scratchboard = self._scratchboards.get(run_id)
+        if scratchboard is not None and result.output:
+            for line in result.output.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("SCRATCHBOARD:"):
+                    content = stripped.removeprefix("SCRATCHBOARD:").strip()
+                    await scratchboard.append(node_id, content)
+
         await self.store.persist_run(run_id)
         if periodic_tick_number is not None:
             return _NodeExecutionOutcome(
@@ -678,6 +708,12 @@ class Orchestrator:
 
         node_map = pipeline.node_map
         iteration_counts: dict[tuple[str, str], int] = {}
+
+        # Create scratchboard if enabled
+        if pipeline.scratchboard:
+            from agentflow.scratchboard import Scratchboard, SCRATCHBOARD_FILENAME
+            sb_path = self.store.base_dir / run_id / SCRATCHBOARD_FILENAME
+            self._scratchboards[run_id] = Scratchboard(sb_path)
 
         # Pre-register shared resource counts so instances survive between sequential nodes
         self._register_shared_resources(pipeline)
