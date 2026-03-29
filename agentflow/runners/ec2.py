@@ -136,7 +136,7 @@ class EC2Runner(Runner):
             ssh_target = SimpleNamespace(
                 kind="ssh", host=ip, port=22,
                 username=target.username,
-                identity_file=target.key_name,
+                identity_file=target.identity_file,
                 remote_workdir=None,
             )
             ssh_node = SimpleNamespace(

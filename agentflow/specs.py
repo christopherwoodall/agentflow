@@ -432,6 +432,7 @@ class EC2Target(BaseModel):
     ami: str | None = None
     instance_type: str = "t3.medium"
     key_name: str | None = None
+    identity_file: str | None = None
     security_group_ids: list[str] = Field(default_factory=list)
     subnet_id: str | None = None
     username: str = "ubuntu"
