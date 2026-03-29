@@ -429,6 +429,8 @@ class AwsLambdaTarget(BaseModel):
     function_name: str
     region: str | None = None
     remote_workdir: str = "/tmp/workspace"
+    role_arn: str | None = None
+    memory_mb: int = 512
     qualifier: str | None = None
     invocation_type: Literal["RequestResponse", "Event"] = "RequestResponse"
 
