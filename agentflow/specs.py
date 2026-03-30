@@ -1500,6 +1500,7 @@ class NodeResult(BaseModel):
     tick_count: int = 0
     last_tick_started_at: str | None = None
     next_scheduled_at: str | None = None
+    diff: str | None = None
 
 
 class RunRecord(BaseModel):
