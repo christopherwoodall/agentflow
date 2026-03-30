@@ -102,27 +102,48 @@ const graphViewState = {
   cleanup: null,
   layoutSignature: null,
   positions: {},
+  viewBox: null,
   zoom: 1,
 };
 
+const GRAPH_NODE_STATUS_STYLES = {
+  pending: { fill: "#f6f8fa", stroke: "#d0d7de" },
+  queued: { fill: "#f6f8fa", stroke: "#d0d7de" },
+  skipped: { fill: "#f6f8fa", stroke: "#d0d7de" },
+  running: { fill: "#fff8c5", stroke: "#9a6700" },
+  retrying: { fill: "#fff8c5", stroke: "#9a6700" },
+  completed: { fill: "#dafbe1", stroke: "#1a7f37" },
+  failed: { fill: "#ffebe9", stroke: "#cf222e" },
+  cancelled: { fill: "#ffebe9", stroke: "#cf222e" },
+};
+
+function graphLayoutSignature(nodes) {
+  const pipeline = state.pipeline || state.validationPipeline;
+  const fanouts = pipeline && typeof pipeline === "object" && pipeline.fanouts && typeof pipeline.fanouts === "object"
+    ? pipeline.fanouts
+    : {};
+  return JSON.stringify({
+    fanouts,
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      depends_on: node.depends_on || [],
+      on_failure_restart: node.on_failure_restart || [],
+      until_fanout_settles_from: node.schedule?.until_fanout_settles_from || null,
+    })),
+  });
+}
+
 const GRAPH_STATUS_COLORS = {
   pending: "#d0d7de",
-  queued: "#d0d7de",
-  skipped: "#d0d7de",
+  queued: "#8250df",
+  ready: "#d0d7de",
   running: "#d29922",
   retrying: "#d29922",
   completed: "#1a7f37",
   failed: "#cf222e",
-  cancelled: "#cf222e",
+  skipped: "#d0d7de",
+  cancelled: "#656d76",
 };
-
-function graphLayoutSignature(nodes) {
-  return JSON.stringify(nodes.map((node) => ({
-    id: node.id,
-    depends_on: node.depends_on || [],
-    on_failure_restart: node.on_failure_restart || [],
-  })));
-}
 
 function graphStatusColor(status) {
   return GRAPH_STATUS_COLORS[status] || GRAPH_STATUS_COLORS.pending;
@@ -188,6 +209,42 @@ function ensureGraphNodeTooltip() {
   return tooltip;
 }
 
+function ensureGraphControlsStyle() {
+  if (document.getElementById("graph-controls-style")) return;
+  const style = document.createElement("style");
+  style.id = "graph-controls-style";
+  style.textContent = `
+    .graph-controls {
+      position: absolute;
+      top: 0.75rem;
+      right: 0.75rem;
+      z-index: 2;
+      display: flex;
+      gap: 0.35rem;
+    }
+
+    .graph-controls button {
+      appearance: none;
+      padding: 0.22rem 0.5rem;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      background: #ffffff;
+      color: #1f2328;
+      box-shadow: 0 1px 2px rgba(31, 35, 40, 0.08);
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.2;
+      cursor: pointer;
+    }
+
+    .graph-controls button:hover {
+      background: #f6f8fa;
+      border-color: #afb8c1;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 function formatGraphNodeTooltipDuration(nodeState) {
   const directDuration = extractDuration(nodeState);
   if (directDuration) return directDuration;
@@ -221,38 +278,142 @@ function setGraphNodeTooltipPosition(tooltip, event) {
 }
 
 function graphLayout(nodes) {
-  const levels = topoLevels(nodes);
+  const pipeline = state.pipeline || state.validationPipeline;
+  const fanouts = pipeline && typeof pipeline === "object" && pipeline.fanouts && typeof pipeline.fanouts === "object"
+    ? pipeline.fanouts
+    : {};
+  const normalizedNodes = Array.isArray(nodes)
+    ? nodes.filter((node) => node && typeof node.id === "string" && node.id)
+    : [];
+  const nodeIds = new Set(normalizedNodes.map((node) => node.id));
+  const dependencies = Object.fromEntries(normalizedNodes.map((node) => {
+    const watchedGroup = node.schedule?.until_fanout_settles_from;
+    const watchedDependencies = Array.isArray(fanouts[watchedGroup])
+      ? fanouts[watchedGroup].filter((dependency) => nodeIds.has(dependency))
+      : [];
+    return [
+      node.id,
+      Array.from(new Set([
+        ...(Array.isArray(node.depends_on) ? node.depends_on : []),
+        ...watchedDependencies,
+      ].filter((dependency) => nodeIds.has(dependency)))),
+    ];
+  }));
+  const levels = {};
+  const visiting = new Set();
   const groups = {};
+  const fanoutGroupByNodeId = {};
   let maxLevel = 0;
 
-  nodes.forEach((node) => {
+  function visit(nodeId) {
+    if (levels[nodeId] !== undefined) return levels[nodeId];
+    if (visiting.has(nodeId)) return levels[nodeId] ?? 0;
+    visiting.add(nodeId);
+    const dependencyLevels = (dependencies[nodeId] || []).map((dependency) => visit(dependency));
+    visiting.delete(nodeId);
+    levels[nodeId] = dependencyLevels.length ? Math.max(...dependencyLevels) + 1 : 0;
+    return levels[nodeId];
+  }
+
+  Object.entries(fanouts).forEach(([groupId, memberIds]) => {
+    if (!Array.isArray(memberIds)) return;
+    memberIds.forEach((memberId) => {
+      if (nodeIds.has(memberId)) fanoutGroupByNodeId[memberId] = groupId;
+    });
+  });
+
+  normalizedNodes.forEach((node) => {
+    visit(node.id);
     const level = levels[node.id] || 0;
     groups[level] ||= [];
     groups[level].push(node);
     maxLevel = Math.max(maxLevel, level);
   });
 
-  const nodeWidth = 220;
-  const nodeHeight = 104;
-  const levelGap = 156;
-  const rowGap = 56;
-  const margin = { top: 48, right: 72, bottom: 48, left: 48 };
-  const maxGroupSize = Math.max(1, ...Object.values(groups).map((group) => group.length));
-  const sceneWidth = Math.max(860, margin.left + (maxLevel + 1) * nodeWidth + maxLevel * levelGap + margin.right);
-  const sceneHeight = Math.max(560, margin.top + maxGroupSize * nodeHeight + Math.max(0, maxGroupSize - 1) * rowGap + margin.bottom);
+  const nodeWidth = 120;
+  const nodeHeight = 50;
+  const nodeGap = 10;
+  const levelGap = 10;
+  const fanoutColumns = 8;
+  const margin = { top: 32, right: 32, bottom: 32, left: 32 };
+  const levelLayouts = {};
+  let maxLevelHeight = nodeHeight;
+  let contentWidth = 0;
   const positions = {};
 
-  Object.entries(groups).forEach(([levelText, group]) => {
-    const level = Number(levelText);
-    const columnHeight = group.length * nodeHeight + Math.max(0, group.length - 1) * rowGap;
-    const startY = margin.top + Math.max(0, (sceneHeight - margin.top - margin.bottom - columnHeight) / 2);
-    group.forEach((node, index) => {
-      positions[node.id] = {
-        x: margin.left + level * (nodeWidth + levelGap),
-        y: startY + index * (nodeHeight + rowGap),
-      };
+  for (let level = 0; level <= maxLevel; level += 1) {
+    const group = groups[level] || [];
+    const fanoutNodesByGroup = {};
+    group.forEach((node) => {
+      const fanoutGroupId = fanoutGroupByNodeId[node.id];
+      if (!fanoutGroupId) return;
+      fanoutNodesByGroup[fanoutGroupId] ||= [];
+      fanoutNodesByGroup[fanoutGroupId].push(node);
     });
-  });
+
+    const seenFanoutGroups = new Set();
+    const blocks = [];
+    group.forEach((node) => {
+      const fanoutGroupId = fanoutGroupByNodeId[node.id];
+      if (!fanoutGroupId) {
+        blocks.push({ type: "node", nodes: [node], width: nodeWidth, height: nodeHeight });
+        return;
+      }
+      if (seenFanoutGroups.has(fanoutGroupId)) return;
+      seenFanoutGroups.add(fanoutGroupId);
+      const fanoutNodes = fanoutNodesByGroup[fanoutGroupId] || [];
+      const columns = Math.max(1, Math.min(fanoutColumns, fanoutNodes.length));
+      const rows = Math.max(1, Math.ceil(fanoutNodes.length / fanoutColumns));
+      blocks.push({
+        type: "fanout",
+        nodes: fanoutNodes,
+        width: columns * nodeWidth + Math.max(0, columns - 1) * nodeGap,
+        height: rows * nodeHeight + Math.max(0, rows - 1) * nodeGap,
+      });
+    });
+
+    const width = Math.max(nodeWidth, ...blocks.map((block) => block.width));
+    const height = blocks.length
+      ? blocks.reduce((sum, block, index) => sum + block.height + (index ? nodeGap : 0), 0)
+      : nodeHeight;
+    levelLayouts[level] = { blocks, width, height };
+    maxLevelHeight = Math.max(maxLevelHeight, height);
+    contentWidth += width + (level < maxLevel ? levelGap : 0);
+  }
+
+  const sceneWidth = Math.max(480, margin.left + contentWidth + margin.right);
+  const sceneHeight = Math.max(180, margin.top + maxLevelHeight + margin.bottom);
+  const levelX = {};
+  let nextLevelX = margin.left;
+
+  for (let level = 0; level <= maxLevel; level += 1) {
+    levelX[level] = nextLevelX;
+    nextLevelX += (levelLayouts[level]?.width ?? nodeWidth) + (level < maxLevel ? levelGap : 0);
+  }
+
+  for (let level = 0; level <= maxLevel; level += 1) {
+    const levelLayout = levelLayouts[level];
+    if (!levelLayout?.blocks?.length) continue;
+    let nextBlockY = margin.top + Math.max(0, (sceneHeight - margin.top - margin.bottom - levelLayout.height) / 2);
+    levelLayout.blocks.forEach((block) => {
+      if (block.type === "fanout") {
+        block.nodes.forEach((node, index) => {
+          const column = index % fanoutColumns;
+          const row = Math.floor(index / fanoutColumns);
+          positions[node.id] = {
+            x: levelX[level] + column * (nodeWidth + nodeGap),
+            y: nextBlockY + row * (nodeHeight + nodeGap),
+          };
+        });
+      } else {
+        positions[block.nodes[0].id] = {
+          x: levelX[level],
+          y: nextBlockY,
+        };
+      }
+      nextBlockY += block.height + nodeGap;
+    });
+  }
 
   return { nodeWidth, nodeHeight, sceneWidth, sceneHeight, positions };
 }
@@ -299,7 +460,7 @@ function renderRuns() {
 
       #runs .runs-group {
         display: grid;
-        gap: 0.75rem;
+        gap: 0.5rem;
         margin-bottom: 1.25rem;
       }
 
@@ -316,14 +477,23 @@ function renderRuns() {
 
       #runs .run-item {
         display: grid;
-        gap: 0.55rem;
+        width: 100%;
+        gap: 0.22rem;
         margin-bottom: 0;
-        padding: 0.9rem 1rem 0.95rem 0.85rem;
+        padding: 0.4rem 0.7rem 0.38rem;
         border: 1px solid #d0d7de;
-        border-left: 4px solid transparent;
+        border-left: 3px solid transparent;
         border-radius: 8px;
         background: #ffffff;
+        box-sizing: border-box;
         box-shadow: none;
+        appearance: none;
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+        max-height: 60px;
+        overflow: hidden;
+        text-align: left;
         transition:
           background-color 140ms ease,
           border-color 140ms ease,
@@ -351,74 +521,48 @@ function renderRuns() {
         box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.18);
       }
 
-      #runs .runs-title-row {
+      #runs .runs-topline {
         display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 0.75rem;
-      }
-
-      #runs .runs-title {
-        display: flex;
-        align-items: flex-start;
-        gap: 0.65rem;
+        align-items: center;
+        gap: 0.42rem;
         min-width: 0;
       }
 
-      #runs .runs-title-copy {
-        display: grid;
-        gap: 0.12rem;
+      #runs .runs-pipeline {
         min-width: 0;
-      }
-
-      #runs .run-item h3 {
         margin: 0;
         color: #24292f;
-        font-size: 0.94rem;
+        font-size: 0.88rem;
         font-weight: 600;
-        line-height: 1.35;
-      }
-
-      #runs .runs-id {
-        color: #57606a;
-        font-size: 0.72rem;
-        line-height: 1.4;
-      }
-
-      #runs .runs-status-label,
-      #runs .runs-meta,
-      #runs .runs-progress-meta {
-        color: #57606a;
-        font-size: 0.74rem;
-        line-height: 1.45;
-      }
-
-      #runs .runs-status-label {
-        text-transform: capitalize;
+        line-height: 1.2;
+        overflow: hidden;
+        text-overflow: ellipsis;
         white-space: nowrap;
       }
 
-      #runs .runs-meta,
-      #runs .runs-progress-meta {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.4rem 0.75rem;
+      #runs .runs-time,
+      #runs .runs-subline {
+        color: #57606a;
+        font-size: 0.72rem;
+        line-height: 1.2;
       }
 
-      #runs .runs-meta-copy {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 0.35rem;
+      #runs .runs-time {
+        flex: 0 0 auto;
+        margin-left: auto;
+        white-space: nowrap;
+      }
+
+      #runs .runs-subline {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       #runs .runs-status-dot {
-        width: 0.58rem;
-        height: 0.58rem;
+        width: 0.48rem;
+        height: 0.48rem;
         flex: 0 0 auto;
-        margin-top: 0.24rem;
         border-radius: 999px;
         background: #8c959f;
       }
@@ -437,13 +581,11 @@ function renderRuns() {
       }
 
       #runs .runs-progress {
-        display: grid;
-        gap: 0.35rem;
-        margin-top: 0.05rem;
+        margin-top: 0.12rem;
       }
 
       #runs .runs-progress-track {
-        height: 4px;
+        height: 3px;
         overflow: hidden;
         border-radius: 999px;
         background: #eaeef2;
@@ -461,12 +603,45 @@ function renderRuns() {
     container.innerHTML = '<div class="small">No runs yet.</div>';
     return;
   }
-  const liveRunStatuses = new Set(["running", "cancelling"]);
   const inactiveNodeStatuses = new Set(["pending", "queued", "ready"]);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
   const groups = { Today: [], Yesterday: [], Older: [] };
+  const escapeAttr = (text) => escapeHtml(text).replaceAll('"', "&quot;");
+  const truncateRunName = (value) => {
+    const text = String(value || "Untitled pipeline");
+    return text.length > 20 ? `${text.slice(0, 17)}...` : text;
+  };
+  const formatRelativeTime = (value) => {
+    if (!value) return "-";
+    const timestamp = new Date(value).getTime();
+    if (!Number.isFinite(timestamp)) return "-";
+    const diffSeconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+    if (diffSeconds < 5) return "just now";
+    if (diffSeconds < 60) return `${diffSeconds}s ago`;
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    if (diffMinutes < 60) return `${diffMinutes}m ago`;
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays}d ago`;
+  };
+  const getRunNodeIds = (run) => {
+    const pipelineNodeIds = Array.isArray(run.pipeline?.nodes)
+      ? run.pipeline.nodes.map((node) => node.id).filter(Boolean)
+      : [];
+    return pipelineNodeIds.length ? pipelineNodeIds : Object.keys(run.nodes || {});
+  };
+  const formatRunDuration = (run) => {
+    const startedAt = run?.started_at || run?.created_at;
+    if (!startedAt) return "-";
+    const startedMs = new Date(startedAt).getTime();
+    if (!Number.isFinite(startedMs)) return "-";
+    const finishedMs = run?.finished_at ? new Date(run.finished_at).getTime() : Date.now();
+    if (!Number.isFinite(finishedMs)) return "-";
+    return formatElapsedSeconds(Math.max(0, (finishedMs - startedMs) / 1000)) || "-";
+  };
 
   for (const run of runs) {
     const runDate = new Date(run.started_at || run.created_at || 0);
@@ -482,10 +657,9 @@ function renderRuns() {
   }
 
   const renderProgress = (run) => {
-    if (!liveRunStatuses.has(String(run.status || "").toLowerCase())) return "";
+    if (String(run.status || "").toLowerCase() !== "running") return "";
 
-    const pipelineNodeIds = Array.isArray(run.pipeline?.nodes) ? run.pipeline.nodes.map((node) => node.id) : [];
-    const nodeIds = pipelineNodeIds.length ? pipelineNodeIds : Object.keys(run.nodes || {});
+    const nodeIds = getRunNodeIds(run);
     const totalNodes = nodeIds.length;
     if (!totalNodes) return "";
 
@@ -496,18 +670,11 @@ function renderRuns() {
     const progressPercent = Math.max(0, Math.min(100, (progressedNodes / totalNodes) * 100));
 
     return `
-      <section
-        class="runs-progress"
-        aria-label="Run progress ${progressedNodes} of ${totalNodes} nodes"
-      >
-        <div class="runs-progress-meta">
-          <span>Progress</span>
-          <span>${progressedNodes}/${totalNodes} nodes</span>
-        </div>
+      <div class="runs-progress" aria-label="Run progress ${progressedNodes} of ${totalNodes} nodes">
         <div class="runs-progress-track" aria-hidden="true">
           <div class="runs-progress-fill" style="width:${progressPercent}%"></div>
         </div>
-      </section>
+      </div>
     `;
   };
 
@@ -525,29 +692,21 @@ function renderRuns() {
       <section class="runs-group" aria-label="${label} runs">
         <div class="runs-group-header">${label}</div>
         ${groups[label].map((run) => `
-          <div class="run-item ${run.id === state.runId ? "active" : ""}">
-            <div class="runs-title-row">
-              <div class="runs-title">
-                <span class="runs-status-dot ${statusClass(run.status)}" aria-hidden="true"></span>
-                <div class="runs-title-copy">
-                  <h3>${escapeHtml(run.pipeline.name)}</h3>
-                  <div class="runs-id small mono">${escapeHtml(run.id)}</div>
-                </div>
-              </div>
-              <div class="runs-status-label">${escapeHtml(run.status)}</div>
+          <button
+            type="button"
+            class="run-item ${run.id === state.runId ? "active" : ""}"
+            data-open-run="${escapeAttr(run.id)}"
+            title="${escapeAttr(run.id)}"
+            aria-label="${escapeAttr(`${run.pipeline?.name || "Untitled pipeline"} ${run.status || "pending"} run`)}"
+          >
+            <div class="runs-topline">
+              <strong class="runs-pipeline">${escapeHtml(truncateRunName(run.pipeline?.name))}</strong>
+              <span class="runs-status-dot ${statusClass(run.status)}" aria-hidden="true"></span>
+              <span class="runs-time">${escapeHtml(formatRelativeTime(run.started_at || run.created_at))}</span>
             </div>
-            <div class="runs-meta">
-              <div class="runs-meta-copy">
-                <span>Started: ${escapeHtml(formatDate(run.started_at || run.created_at))}</span>
-                <span aria-hidden="true">·</span>
-                <span>Duration: ${escapeHtml(formatDuration(run))}</span>
-              </div>
-            </div>
+            <div class="runs-subline">${escapeHtml(formatRunDuration(run))} · ${escapeHtml(`${getRunNodeIds(run).length} ${getRunNodeIds(run).length === 1 ? "node" : "nodes"}`)}</div>
             ${renderProgress(run)}
-            <div class="button-row" style="margin-top:0.65rem">
-              <button data-open-run="${run.id}">Open</button>
-            </div>
-          </div>
+          </button>
         `).join("")}
       </section>
     `).join("");
@@ -595,6 +754,7 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
   if (graphViewState.layoutSignature !== signature) {
     graphViewState.layoutSignature = signature;
     graphViewState.positions = {};
+    graphViewState.viewBox = null;
     graphViewState.zoom = 1;
     container.scrollLeft = 0;
     container.scrollTop = 0;
@@ -615,16 +775,24 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
   const badgeFill = "#f6f8fa";
   const badgeStroke = "#d0d7de";
   const badgeTextColor = "#656d76";
+  const defaultViewBox = { x: 0, y: 0, width: layout.sceneWidth, height: layout.sceneHeight };
   const svg = document.createElementNS(ns, "svg");
+  ensureGraphControlsStyle();
 
-  svg.setAttribute("viewBox", `0 0 ${layout.sceneWidth} ${layout.sceneHeight}`);
-  svg.setAttribute("width", String(layout.sceneWidth * graphViewState.zoom));
-  svg.setAttribute("height", String(layout.sceneHeight * graphViewState.zoom));
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  svg.setAttribute("width", "100%");
+  svg.setAttribute("height", "100%");
   svg.style.display = "block";
+  svg.style.width = "100%";
+  svg.style.height = "100%";
   svg.style.userSelect = "none";
   svg.style.webkitUserSelect = "none";
   svg.style.touchAction = "none";
   container.appendChild(svg);
+
+  const controls = document.createElement("div");
+  controls.className = "graph-controls";
+  container.appendChild(controls);
 
   const defs = document.createElementNS(ns, "defs");
   const createMarker = (id, color) => {
@@ -677,11 +845,97 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
   const nodeRefs = {};
   const edgeRefs = [];
 
+  function currentViewBox() {
+    return graphViewState.viewBox || defaultViewBox;
+  }
+
+  function setSvgViewBox(viewBox) {
+    const nextViewBox = {
+      x: Number.isFinite(viewBox?.x) ? viewBox.x : defaultViewBox.x,
+      y: Number.isFinite(viewBox?.y) ? viewBox.y : defaultViewBox.y,
+      width: Math.max(1, Number.isFinite(viewBox?.width) ? viewBox.width : defaultViewBox.width),
+      height: Math.max(1, Number.isFinite(viewBox?.height) ? viewBox.height : defaultViewBox.height),
+    };
+    graphViewState.viewBox = nextViewBox;
+    graphViewState.zoom = Math.min(defaultViewBox.width / nextViewBox.width, defaultViewBox.height / nextViewBox.height);
+    svg.setAttribute("viewBox", `${nextViewBox.x} ${nextViewBox.y} ${nextViewBox.width} ${nextViewBox.height}`);
+  }
+
+  function fitGraphView() {
+    const padding = 48;
+    const bounds = nodes.reduce((acc, node) => {
+      const position = graphViewState.positions[node.id] || layout.positions[node.id];
+      acc.minX = Math.min(acc.minX, position.x);
+      acc.minY = Math.min(acc.minY, position.y);
+      acc.maxX = Math.max(acc.maxX, position.x + layout.nodeWidth);
+      acc.maxY = Math.max(acc.maxY, position.y + layout.nodeHeight);
+      return acc;
+    }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+    setSvgViewBox({
+      x: bounds.minX - padding,
+      y: bounds.minY - padding,
+      width: bounds.maxX - bounds.minX + padding * 2,
+      height: bounds.maxY - bounds.minY + padding * 2,
+    });
+  }
+
+  function resetGraphZoom() {
+    setSvgViewBox(defaultViewBox);
+  }
+
+  function scaleGraphView(factor, anchorPoint = null) {
+    const current = currentViewBox();
+    const currentZoom = graphViewState.zoom || 1;
+    const nextZoom = Math.max(0.6, Math.min(2.4, currentZoom * factor));
+    if (Math.abs(nextZoom - currentZoom) < 0.0001) return;
+    const scaleRatio = currentZoom / nextZoom;
+    const anchorX = anchorPoint?.x ?? current.x + current.width / 2;
+    const anchorY = anchorPoint?.y ?? current.y + current.height / 2;
+    const relativeX = (anchorX - current.x) / current.width;
+    const relativeY = (anchorY - current.y) / current.height;
+    const nextWidth = current.width * scaleRatio;
+    const nextHeight = current.height * scaleRatio;
+    setSvgViewBox({
+      x: anchorX - relativeX * nextWidth,
+      y: anchorY - relativeY * nextHeight,
+      width: nextWidth,
+      height: nextHeight,
+    });
+  }
+
+  [
+    ["Fit", () => fitGraphView()],
+    ["Zoom+", () => scaleGraphView(1.2)],
+    ["Zoom-", () => scaleGraphView(0.8)],
+    ["100%", () => resetGraphZoom()],
+  ].forEach(([label, onClick]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", onClick);
+    controls.appendChild(button);
+  });
+
+  setSvgViewBox(graphViewState.viewBox || defaultViewBox);
+
   function scenePoint(event) {
     const rect = svg.getBoundingClientRect();
+    const viewBox = currentViewBox();
+    const viewportAspect = rect.width / rect.height;
+    const viewBoxAspect = viewBox.width / viewBox.height;
+    let scale = rect.width / viewBox.width;
+    let offsetX = 0;
+    let offsetY = 0;
+    if (viewportAspect > viewBoxAspect) {
+      scale = rect.height / viewBox.height;
+      offsetX = (rect.width - viewBox.width * scale) / 2;
+    } else {
+      scale = rect.width / viewBox.width;
+      offsetY = (rect.height - viewBox.height * scale) / 2;
+    }
     return {
-      x: ((event.clientX - rect.left) / rect.width) * layout.sceneWidth,
-      y: ((event.clientY - rect.top) / rect.height) * layout.sceneHeight,
+      x: viewBox.x + (event.clientX - rect.left - offsetX) / scale,
+      y: viewBox.y + (event.clientY - rect.top - offsetY) / scale,
     };
   }
 
@@ -745,6 +999,19 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
     return null;
   }
 
+  function applySelectionOpacity(selectedNodeId = null) {
+    const hasSelection = typeof selectedNodeId === "string" && Boolean(nodeRefs[selectedNodeId]);
+    Object.entries(nodeRefs).forEach(([nodeId, group]) => {
+      group.style.opacity = !hasSelection || nodeId === selectedNodeId ? "1.0" : "0.3";
+      const selection = group.querySelector('rect[filter="url(#graph-selected-shadow)"]');
+      if (selection) selection.style.opacity = nodeId === selectedNodeId ? "1.0" : "0";
+    });
+    edgeRefs.forEach((edge) => {
+      const isDirectDependencyEdge = edge.kind === "dependency" && edge.toId === selectedNodeId;
+      edge.path.style.opacity = !hasSelection || isDirectDependencyEdge ? "1.0" : "0.3";
+    });
+  }
+
   nodes.forEach((node) => {
     const dependencies = Array.from(new Set(
       (Array.isArray(node.depends_on) ? node.depends_on : []).filter((dependency) => graphViewState.positions[dependency])
@@ -791,8 +1058,8 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
     const result = nodeMap[node.id] || { status: "pending" };
     const status = result.status || "pending";
     const statusColor = graphStatusColor(status);
-    const badgeLabel = truncateGraphLabel(node.agent || "agent", 14);
-    const badgeWidth = Math.max(64, badgeLabel.length * 7 + 24);
+    const badgeLabel = truncateGraphLabel(node.agent || "agent", 10);
+    const badgeWidth = Math.min(layout.nodeWidth - 20, Math.max(36, badgeLabel.length * 5 + 14));
     const group = document.createElementNS(ns, "g");
     group.dataset.nodeId = node.id;
     group.style.cursor = "grab";
@@ -802,7 +1069,7 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
     selection.setAttribute("y", "0");
     selection.setAttribute("width", String(layout.nodeWidth));
     selection.setAttribute("height", String(layout.nodeHeight));
-    selection.setAttribute("rx", "8");
+    selection.setAttribute("rx", "6");
     selection.setAttribute("fill", "none");
     selection.setAttribute("stroke", selectedColor);
     selection.setAttribute("stroke-width", "2");
@@ -815,58 +1082,58 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
     card.setAttribute("y", "0");
     card.setAttribute("width", String(layout.nodeWidth));
     card.setAttribute("height", String(layout.nodeHeight));
-    card.setAttribute("rx", "8");
+    card.setAttribute("rx", "6");
     card.setAttribute("fill", nodeFill);
     card.setAttribute("stroke", statusColor);
     card.setAttribute("stroke-width", "2");
     group.appendChild(card);
 
     const title = document.createElementNS(ns, "text");
-    title.setAttribute("x", "16");
-    title.setAttribute("y", "32");
+    title.setAttribute("x", "10");
+    title.setAttribute("y", "17");
     title.setAttribute("fill", nodeText);
-    title.setAttribute("font-size", "12");
+    title.setAttribute("font-size", "10");
     title.setAttribute("font-weight", "600");
     title.setAttribute("font-family", "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace");
-    title.textContent = truncateGraphLabel(node.id, 24);
+    title.textContent = truncateGraphLabel(node.id, 12);
     group.appendChild(title);
 
     const statusText = document.createElementNS(ns, "text");
-    statusText.setAttribute("x", String(layout.nodeWidth - 16));
-    statusText.setAttribute("y", "32");
+    statusText.setAttribute("x", String(layout.nodeWidth - 10));
+    statusText.setAttribute("y", "17");
     statusText.setAttribute("fill", nodeText);
-    statusText.setAttribute("font-size", "11");
+    statusText.setAttribute("font-size", "8");
     statusText.setAttribute("font-weight", "600");
     statusText.setAttribute("text-anchor", "end");
     statusText.setAttribute("font-family", "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace");
-    statusText.textContent = truncateGraphLabel(status.toUpperCase(), 12);
+    statusText.textContent = truncateGraphLabel(status.toUpperCase(), 8);
     group.appendChild(statusText);
 
     const subtitle = document.createElementNS(ns, "text");
-    subtitle.setAttribute("x", "16");
-    subtitle.setAttribute("y", "58");
+    subtitle.setAttribute("x", "10");
+    subtitle.setAttribute("y", "30");
     subtitle.setAttribute("fill", nodeText);
-    subtitle.setAttribute("font-size", "11");
+    subtitle.setAttribute("font-size", "8");
     subtitle.setAttribute("font-family", "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace");
     subtitle.textContent = `Attempts ${(result.current_attempt || 0)}/${(node.retries || 0) + 1}`;
     group.appendChild(subtitle);
 
     const badge = document.createElementNS(ns, "rect");
-    badge.setAttribute("x", "16");
-    badge.setAttribute("y", "72");
+    badge.setAttribute("x", "10");
+    badge.setAttribute("y", "34");
     badge.setAttribute("width", String(badgeWidth));
-    badge.setAttribute("height", "22");
-    badge.setAttribute("rx", "11");
+    badge.setAttribute("height", "12");
+    badge.setAttribute("rx", "6");
     badge.setAttribute("fill", badgeFill);
     badge.setAttribute("stroke", badgeStroke);
     badge.setAttribute("stroke-width", "1");
     group.appendChild(badge);
 
     const badgeText = document.createElementNS(ns, "text");
-    badgeText.setAttribute("x", String(16 + badgeWidth / 2));
-    badgeText.setAttribute("y", "87");
+    badgeText.setAttribute("x", String(10 + badgeWidth / 2));
+    badgeText.setAttribute("y", "43");
     badgeText.setAttribute("fill", badgeTextColor);
-    badgeText.setAttribute("font-size", "11");
+    badgeText.setAttribute("font-size", "8");
     badgeText.setAttribute("font-weight", "600");
     badgeText.setAttribute("text-anchor", "middle");
     badgeText.setAttribute("font-family", "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace");
@@ -883,7 +1150,7 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
         return;
       }
       state.selectedNodeId = node.id;
-      renderGraph();
+      applySelectionOpacity(state.selectedNodeId);
       renderDetail();
     });
 
@@ -917,6 +1184,8 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
 
     nodesLayer.appendChild(group);
   });
+
+  applySelectionOpacity(state.selectedNodeId);
 
   function stopDragging() {
     if (!dragState) return;
@@ -972,20 +1241,19 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
 
   function handleWheel(event) {
     event.preventDefault();
-    const nextZoom = Math.max(0.6, Math.min(2.4, graphViewState.zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12)));
-    if (nextZoom === graphViewState.zoom) return;
-    const containerRect = container.getBoundingClientRect();
-    const offsetX = event.clientX - containerRect.left + container.scrollLeft;
-    const offsetY = event.clientY - containerRect.top + container.scrollTop;
-    const logicalX = offsetX / graphViewState.zoom;
-    const logicalY = offsetY / graphViewState.zoom;
-    graphViewState.zoom = nextZoom;
-    svg.setAttribute("width", String(layout.sceneWidth * graphViewState.zoom));
-    svg.setAttribute("height", String(layout.sceneHeight * graphViewState.zoom));
-    container.scrollLeft = Math.max(0, logicalX * graphViewState.zoom - (event.clientX - containerRect.left));
-    container.scrollTop = Math.max(0, logicalY * graphViewState.zoom - (event.clientY - containerRect.top));
+    scaleGraphView(event.deltaY < 0 ? 1.12 : 1 / 1.12, scenePoint(event));
   }
 
+  background.addEventListener("click", () => {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+    if (!state.selectedNodeId) return;
+    state.selectedNodeId = null;
+    applySelectionOpacity();
+    renderDetail();
+  });
   svg.addEventListener("mousedown", handleMouseDown);
   svg.addEventListener("wheel", handleWheel, { passive: false });
   window.addEventListener("mousemove", handleMouseMove);
@@ -1597,7 +1865,10 @@ function renderLifecycleEvent(event) {
     <div class="summary-card">
       <div><strong>${escapeHtml(event.type)}</strong></div>
       <div class="small">${escapeHtml(formatDate(event.timestamp))}</div>
-      ${renderPreBlock(event.data || {})}
+      <details style="margin-top:0.75rem">
+        <summary style="cursor:pointer" class="small">View raw</summary>
+        ${renderPreBlock(event.data || {})}
+      </details>
     </div>
   `;
 }
@@ -1631,6 +1902,25 @@ async function renderDetail() {
   }
 
   const activeTab = state.detailTab;
+  const latestAttempt = Array.isArray(selected.attempts) && selected.attempts.length
+    ? selected.attempts[selected.attempts.length - 1]
+    : null;
+  const detailStatus = selected.status || "pending";
+  const detailAttempt = selected.current_attempt || latestAttempt?.number || 0;
+  const detailExitCode = selected.exit_code ?? latestAttempt?.exit_code ?? "-";
+  const detailDuration = formatGraphNodeTooltipDuration(selected) || "-";
+  const detailStatusColor = graphStatusColor(normalizedStatus);
+  const detailSummary = `
+    <div style="display:flex;align-items:center;gap:0.35rem;margin:0 0 0.9rem;overflow-x:auto;color:#656d76;font-size:0.84rem;line-height:1.4;white-space:nowrap;">
+      <span style="color:${detailStatusColor};font-weight:700;">${escapeHtml(detailStatus)}</span>
+      <span aria-hidden="true">·</span>
+      <span>exit ${escapeHtml(String(detailExitCode))}</span>
+      <span aria-hidden="true">·</span>
+      <span>attempt ${escapeHtml(String(detailAttempt))}</span>
+      <span aria-hidden="true">·</span>
+      <span>${escapeHtml(detailDuration)}</span>
+    </div>
+  `;
   const renderDetailPre = (value, options = {}) => {
     const {
       emptyMessage = "Nothing to show yet.",
@@ -1828,8 +2118,14 @@ async function renderDetail() {
     { id: "stdout", label: "Stdout" },
     { id: "stderr", label: "Stderr" },
   ];
+  const successChecks = Array.isArray(selected.success_details) ? selected.success_details : [];
+  const successChecksText = successChecks.length
+    ? escapeHtml(successChecks.join("\n"))
+    : "no success criteria";
+  const detailSectionSummaryStyle = "cursor:pointer;font-size:0.84rem;font-weight:600;line-height:1.5;";
 
   detail.innerHTML = `
+    ${detailSummary}
     <div class="trace-item" style="margin-top:0">
       <div role="tablist" aria-label="Node detail views" style="display:flex;flex-wrap:wrap;gap:0.6rem;margin-bottom:0.9rem">
         ${detailTabs.map((tab) => {
@@ -1849,24 +2145,24 @@ async function renderDetail() {
         ${tabPanelContent}
       </div>
     </div>
-    <div class="summary-grid">
-      <div class="summary-card"><div class="small">Status</div><strong>${escapeHtml(selected.status || "pending")}</strong></div>
-      <div class="summary-card"><div class="small">Current attempt</div><strong>${escapeHtml(String(selected.current_attempt || 0))}</strong></div>
-      <div class="summary-card"><div class="small">Exit code</div><strong>${escapeHtml(String(selected.exit_code ?? "-"))}</strong></div>
-      <div class="summary-card"><div class="small">Success</div><strong>${escapeHtml(String(selected.success ?? "-"))}</strong></div>
-    </div>
-    <div class="trace-item">
-      <h4>Attempts</h4>
-      <div class="summary-grid">${attemptRows || '<div class="small">No attempts yet.</div>'}</div>
-    </div>
-    <div class="trace-item">
-      <h4>Success checks</h4>
-      <div class="output-box">${escapeHtml((selected.success_details || []).join("\n"))}</div>
-    </div>
-    <div class="trace-item">
-      <h4>Lifecycle Events</h4>
-      ${lifecycleEvents.map((event) => renderLifecycleEvent(event)).join("") || '<div class="small">No node-specific lifecycle events yet.</div>'}
-    </div>
+    <details class="trace-item" open>
+      <summary style="${detailSectionSummaryStyle}">Attempts</summary>
+      <div style="margin-top:0.75rem">
+        <div class="summary-grid">${attemptRows || '<div class="small">No attempts yet.</div>'}</div>
+      </div>
+    </details>
+    <details class="trace-item"${successChecks.length ? " open" : ""}>
+      <summary style="${detailSectionSummaryStyle}">Success checks</summary>
+      <div style="margin-top:0.75rem">
+        <div class="output-box" style="margin-top:0">${successChecksText}</div>
+      </div>
+    </details>
+    <details class="trace-item">
+      <summary style="${detailSectionSummaryStyle}">Lifecycle Events</summary>
+      <div style="margin-top:0.75rem">
+        ${lifecycleEvents.map((event) => renderLifecycleEvent(event)).join("") || '<div class="small">No node-specific lifecycle events yet.</div>'}
+      </div>
+    </details>
   `;
 
   detail.querySelectorAll("button[data-detail-tab]").forEach((button) => {
