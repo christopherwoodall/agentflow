@@ -38,9 +38,11 @@ echo "✓ Repository ready"
 
 # Create venv and install
 if [ ! -d ".venv" ]; then
+  echo "  Creating virtual environment..."
   python3 -m venv .venv
 fi
-.venv/bin/pip install -q -e ".[dev]"
+echo "  Installing dependencies (this may take a minute)..."
+.venv/bin/pip install -e ".[dev]" 2>&1 | tail -1
 echo "✓ Package installed"
 
 # Add to PATH
