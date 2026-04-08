@@ -293,65 +293,40 @@ class LocalRunner(Runner):
         stdout_task = asyncio.create_task(self._consume_stream(node, process.stdout, "stdout", stdout_lines, on_output))
         stderr_task = asyncio.create_task(self._consume_stream(node, process.stderr, "stderr", stderr_lines, on_output))
         wait_task = asyncio.create_task(process.wait())
-        stream_gather = asyncio.gather(stdout_task, stderr_task)
+        deadline = asyncio.get_running_loop().time() + node.timeout_seconds
         timed_out = False
         cancelled = False
 
-        timeout = node.timeout_seconds if node.timeout_seconds and node.timeout_seconds > 0 else None
-
         try:
-            # Use asyncio.wait to monitor streams, process exit, AND cancellation
-            # concurrently. The old polling loop (while/sleep 0.1) could not
-            # detect silent process exits — this approach wakes immediately
-            # when any of the monitored tasks complete.
-            deadline = asyncio.get_running_loop().time() + timeout if timeout else None
-            while True:
-                remaining = deadline - asyncio.get_running_loop().time() if deadline else None
-                if remaining is not None and remaining <= 0:
-                    timed_out = True
-                    break
+            while not wait_task.done():
                 if should_cancel():
                     cancelled = True
+                    await self._terminate_with_fallback(process, wait_task)
                     break
-                # Wait for either streams to finish or process to exit,
-                # with short check intervals for cancellation
-                check_timeout = min(remaining or 1.0, 1.0)
-                done, _ = await asyncio.wait(
-                    {stream_gather, wait_task},
-                    timeout=check_timeout,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if stream_gather in done or wait_task in done:
-                    # Streams EOF'd or process exited — wait for both
-                    if not stream_gather.done():
-                        await stream_gather
-                    if not wait_task.done():
-                        await wait_task
+                if asyncio.get_running_loop().time() >= deadline:
+                    timed_out = True
+                    with suppress(ProcessLookupError):
+                        process.kill()
                     break
-        except Exception:
-            timed_out = True
+                await asyncio.sleep(0.1)
+            await asyncio.shield(wait_task)
+        finally:
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            if timed_out:
+                stderr_lines.append(f"Timed out after {node.timeout_seconds}s")
+                await on_output("stderr", stderr_lines[-1])
+            if cancelled:
+                stderr_lines.append("Cancelled by user")
+                await on_output("stderr", stderr_lines[-1])
+            with suppress(ProcessLookupError):
+                if not wait_task.done():
+                    process.kill()
+                    await asyncio.shield(wait_task)
 
-        if timed_out:
-            # Graceful shutdown: SIGTERM first, then SIGKILL after grace period
-            await self._terminate_with_fallback(process, wait_task)
-            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
-            stderr_lines.append(f"Timed out after {node.timeout_seconds}s")
-            await on_output("stderr", stderr_lines[-1])
-        elif cancelled:
-            await self._terminate_with_fallback(process, wait_task)
-            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
-            stderr_lines.append("Cancelled by user")
-            await on_output("stderr", stderr_lines[-1])
-        else:
-            # Normal completion — ensure everything is cleaned up
-            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
-            if not wait_task.done():
-                await wait_task
-
-        if timed_out:
-            exit_code = 124
-        elif cancelled:
+        if cancelled:
             exit_code = 130
+        elif timed_out:
+            exit_code = 124
         else:
             exit_code = process.returncode if process.returncode is not None else 0
         return RawExecutionResult(
