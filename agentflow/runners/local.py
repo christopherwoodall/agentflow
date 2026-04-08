@@ -292,58 +292,68 @@ class LocalRunner(Runner):
         stderr_lines: list[str] = []
         stdout_task = asyncio.create_task(self._consume_stream(node, process.stdout, "stdout", stdout_lines, on_output))
         stderr_task = asyncio.create_task(self._consume_stream(node, process.stderr, "stderr", stderr_lines, on_output))
+        wait_task = asyncio.create_task(process.wait())
+        stream_gather = asyncio.gather(stdout_task, stderr_task)
         timed_out = False
         cancelled = False
 
         timeout = node.timeout_seconds if node.timeout_seconds and node.timeout_seconds > 0 else None
 
         try:
-            # Wait for streams to complete (implies process has finished writing).
-            # Use asyncio.wait_for for proper timeout enforcement instead of
-            # polling — the previous polling loop could miss process exits and
-            # wait indefinitely on dead processes.
-            if timeout:
-                await asyncio.wait_for(
-                    asyncio.gather(stdout_task, stderr_task),
-                    timeout=timeout,
+            # Use asyncio.wait to monitor streams, process exit, AND cancellation
+            # concurrently. The old polling loop (while/sleep 0.1) could not
+            # detect silent process exits — this approach wakes immediately
+            # when any of the monitored tasks complete.
+            deadline = asyncio.get_running_loop().time() + timeout if timeout else None
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time() if deadline else None
+                if remaining is not None and remaining <= 0:
+                    timed_out = True
+                    break
+                if should_cancel():
+                    cancelled = True
+                    break
+                # Wait for either streams to finish or process to exit,
+                # with short check intervals for cancellation
+                check_timeout = min(remaining or 1.0, 1.0)
+                done, _ = await asyncio.wait(
+                    {stream_gather, wait_task},
+                    timeout=check_timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
-            else:
-                await asyncio.gather(stdout_task, stderr_task)
-            await process.wait()
-        except asyncio.TimeoutError:
+                if stream_gather in done or wait_task in done:
+                    # Streams EOF'd or process exited — wait for both
+                    if not stream_gather.done():
+                        await stream_gather
+                    if not wait_task.done():
+                        await wait_task
+                    break
+        except Exception:
             timed_out = True
-            # Graceful shutdown: SIGTERM first, then SIGKILL after 5s
-            with suppress(ProcessLookupError):
-                process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                with suppress(ProcessLookupError):
-                    process.kill()
-                await process.wait()
-            # Drain remaining stream output after kill
+
+        if timed_out:
+            # Graceful shutdown: SIGTERM first, then SIGKILL after grace period
+            await self._terminate_with_fallback(process, wait_task)
             await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
             stderr_lines.append(f"Timed out after {node.timeout_seconds}s")
             await on_output("stderr", stderr_lines[-1])
-
-        # Check for cancellation after stream completion
-        if not timed_out and should_cancel():
-            cancelled = True
-            if process.returncode is None:
-                with suppress(ProcessLookupError):
-                    process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=5)
-                except asyncio.TimeoutError:
-                    with suppress(ProcessLookupError):
-                        process.kill()
-                    await process.wait()
+        elif cancelled:
+            await self._terminate_with_fallback(process, wait_task)
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
             stderr_lines.append("Cancelled by user")
             await on_output("stderr", stderr_lines[-1])
+        else:
+            # Normal completion — ensure everything is cleaned up
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            if not wait_task.done():
+                await wait_task
 
-        exit_code = process.returncode if process.returncode is not None else (
-            124 if timed_out else 130 if cancelled else 0
-        )
+        if timed_out:
+            exit_code = 124
+        elif cancelled:
+            exit_code = 130
+        else:
+            exit_code = process.returncode if process.returncode is not None else 0
         return RawExecutionResult(
             exit_code=exit_code,
             stdout_lines=stdout_lines,
