@@ -292,43 +292,58 @@ class LocalRunner(Runner):
         stderr_lines: list[str] = []
         stdout_task = asyncio.create_task(self._consume_stream(node, process.stdout, "stdout", stdout_lines, on_output))
         stderr_task = asyncio.create_task(self._consume_stream(node, process.stderr, "stderr", stderr_lines, on_output))
-        wait_task = asyncio.create_task(process.wait())
-        deadline = asyncio.get_running_loop().time() + node.timeout_seconds
         timed_out = False
         cancelled = False
 
+        timeout = node.timeout_seconds if node.timeout_seconds and node.timeout_seconds > 0 else None
+
         try:
-            while not wait_task.done():
-                if should_cancel():
-                    cancelled = True
-                    await self._terminate_with_fallback(process, wait_task)
-                    break
-                if asyncio.get_running_loop().time() >= deadline:
-                    timed_out = True
+            # Wait for streams to complete (implies process has finished writing).
+            # Use asyncio.wait_for for proper timeout enforcement instead of
+            # polling — the previous polling loop could miss process exits and
+            # wait indefinitely on dead processes.
+            if timeout:
+                await asyncio.wait_for(
+                    asyncio.gather(stdout_task, stderr_task),
+                    timeout=timeout,
+                )
+            else:
+                await asyncio.gather(stdout_task, stderr_task)
+            await process.wait()
+        except asyncio.TimeoutError:
+            timed_out = True
+            # Graceful shutdown: SIGTERM first, then SIGKILL after 5s
+            with suppress(ProcessLookupError):
+                process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                with suppress(ProcessLookupError):
+                    process.kill()
+                await process.wait()
+            # Drain remaining stream output after kill
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            stderr_lines.append(f"Timed out after {node.timeout_seconds}s")
+            await on_output("stderr", stderr_lines[-1])
+
+        # Check for cancellation after stream completion
+        if not timed_out and should_cancel():
+            cancelled = True
+            if process.returncode is None:
+                with suppress(ProcessLookupError):
+                    process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5)
+                except asyncio.TimeoutError:
                     with suppress(ProcessLookupError):
                         process.kill()
-                    break
-                await asyncio.sleep(0.1)
-            await asyncio.shield(wait_task)
-        finally:
-            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
-            if timed_out:
-                stderr_lines.append(f"Timed out after {node.timeout_seconds}s")
-                await on_output("stderr", stderr_lines[-1])
-            if cancelled:
-                stderr_lines.append("Cancelled by user")
-                await on_output("stderr", stderr_lines[-1])
-            with suppress(ProcessLookupError):
-                if not wait_task.done():
-                    process.kill()
-                    await asyncio.shield(wait_task)
+                    await process.wait()
+            stderr_lines.append("Cancelled by user")
+            await on_output("stderr", stderr_lines[-1])
 
-        if cancelled:
-            exit_code = 130
-        elif timed_out:
-            exit_code = 124
-        else:
-            exit_code = process.returncode if process.returncode is not None else 0
+        exit_code = process.returncode if process.returncode is not None else (
+            124 if timed_out else 130 if cancelled else 0
+        )
         return RawExecutionResult(
             exit_code=exit_code,
             stdout_lines=stdout_lines,
