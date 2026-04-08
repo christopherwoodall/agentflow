@@ -734,5 +734,104 @@ def test_container_runner_plan_execution_shows_host_and_container_context(tmp_pa
     }
 
 
+@pytest.mark.asyncio
+async def test_local_runner_detects_silent_process_exit(tmp_path: Path):
+    """Process that exits with code 0 and produces no output should complete promptly."""
+    node = NodeSpec.model_validate(
+        {
+            "id": "silent-exit",
+            "agent": "codex",
+            "prompt": "hi",
+            "timeout_seconds": 5,
+        }
+    )
+    prepared = PreparedExecution(
+        command=["python3", "-c", "pass"],
+        env={},
+        cwd=str(tmp_path),
+        trace_kind="codex",
+    )
+
+    result = await asyncio.wait_for(
+        LocalRunner().execute(node, prepared, _paths(tmp_path), _noop_output, lambda: False),
+        timeout=3,
+    )
+
+    assert result.exit_code == 0
+    assert result.timed_out is False
+    assert result.cancelled is False
+    assert result.stdout_lines == []
+
+
+@pytest.mark.asyncio
+async def test_local_runner_timeout_kills_hanging_process(tmp_path: Path):
+    """Process that ignores SIGTERM is killed after timeout + grace period."""
+    node = NodeSpec.model_validate(
+        {
+            "id": "timeout-kill",
+            "agent": "codex",
+            "prompt": "hi",
+            "timeout_seconds": 1,
+        }
+    )
+    prepared = PreparedExecution(
+        command=[
+            "python3",
+            "-c",
+            (
+                "import signal, time; "
+                "signal.signal(signal.SIGTERM, lambda s, f: None); "
+                'print("started", flush=True); '
+                "time.sleep(120)"
+            ),
+        ],
+        env={},
+        cwd=str(tmp_path),
+        trace_kind="codex",
+    )
+
+    result = await asyncio.wait_for(
+        LocalRunner().execute(node, prepared, _paths(tmp_path), _noop_output, lambda: False),
+        timeout=15,
+    )
+
+    assert result.timed_out is True
+    assert result.exit_code == 124
+    assert result.stdout_lines == ["started"]
+    assert any("Timed out" in line for line in result.stderr_lines)
+
+
+@pytest.mark.asyncio
+async def test_local_runner_process_crash_detected_promptly(tmp_path: Path):
+    """Process that crashes (non-zero exit) should be detected without waiting for timeout."""
+    node = NodeSpec.model_validate(
+        {
+            "id": "crash-detect",
+            "agent": "codex",
+            "prompt": "hi",
+            "timeout_seconds": 30,
+        }
+    )
+    prepared = PreparedExecution(
+        command=[
+            "python3",
+            "-c",
+            'print("before crash", flush=True); raise SystemExit(1)',
+        ],
+        env={},
+        cwd=str(tmp_path),
+        trace_kind="codex",
+    )
+
+    result = await asyncio.wait_for(
+        LocalRunner().execute(node, prepared, _paths(tmp_path), _noop_output, lambda: False),
+        timeout=5,
+    )
+
+    assert result.exit_code == 1
+    assert result.timed_out is False
+    assert result.stdout_lines == ["before crash"]
+
+
 async def _noop_output(stream_name: str, text: str) -> None:
     return None
