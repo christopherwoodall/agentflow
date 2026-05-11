@@ -23,6 +23,7 @@ class PreparedExecution:
     cwd: str
     trace_kind: str
     runtime_files: dict[str, str] = field(default_factory=dict)
+    runtime_symlinks: dict[str, str] = field(default_factory=dict)
     stdin: str | None = None
 
 

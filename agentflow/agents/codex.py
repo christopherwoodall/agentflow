@@ -76,6 +76,41 @@ class CodexAdapter(AgentAdapter):
             )
         return override
 
+    _WRAPPER_FILENAME = "agentflow_wrapper.md"
+    _WRAPPER_SEPARATOR = "\n\n---\n\n"
+
+    def _maybe_prepend_wrapper(self, node: NodeSpec, prompt: str) -> str:
+        """Prepend an agentflow-side wrapper to the user prompt if one exists.
+
+        For tuned codex builds the executable lives at
+        ``<version>/repo/codex-rs/target/debug/codex``; we look for
+        ``<version>/repo/codex-rs/agentflow_wrapper.md`` next to it. This is
+        the most reliable evolution surface because the wrapper text becomes
+        part of the user message — gateways that override server-side system
+        prompts cannot strip it.
+        """
+        executable = node.executable
+        if not executable:
+            return prompt
+        exec_path = Path(executable).expanduser()
+        if not exec_path.is_absolute():
+            return prompt
+        # codex_tuned binary path: .../codex-rs/target/debug/codex
+        # → walk up three parents to reach codex-rs/
+        if len(exec_path.parents) < 3:
+            return prompt
+        codex_rs_root = exec_path.parents[2]
+        wrapper_path = codex_rs_root / self._WRAPPER_FILENAME
+        if not wrapper_path.is_file():
+            return prompt
+        try:
+            wrapper_text = wrapper_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return prompt
+        if not wrapper_text:
+            return prompt
+        return wrapper_text + self._WRAPPER_SEPARATOR + prompt
+
     def prepare(self, node: NodeSpec, prompt: str, paths: ExecutionPaths) -> PreparedExecution:
         provider = self.provider_config(node.provider, node.agent)
         executable = node.executable or "codex"
@@ -102,16 +137,30 @@ class CodexAdapter(AgentAdapter):
             command.extend(["--disable", "plugins"])
             command.extend(["--add-dir", paths.target_workdir])
         command.extend(node.extra_args)
+        prompt = self._maybe_prepend_wrapper(node, prompt)
         command.append(prompt)
 
         runtime_files: dict[str, str] = {}
+        runtime_symlinks: dict[str, str] = {}
         if provider or node.mcps or repo_instructions_ignored:
             codex_home = str(Path(paths.target_runtime_dir) / "codex_home")
-            runtime_files[self.relative_runtime_file("codex_home", "config.toml")] = self._render_config(
-                node,
-                provider,
-                sandbox,
+            host_config = Path.home() / ".codex" / "config.toml"
+            inherit_host_config = (
+                provider is None
+                and not node.mcps
+                and host_config.is_file()
             )
+            if inherit_host_config:
+                runtime_symlinks[self.relative_runtime_file("codex_home", "config.toml")] = str(host_config)
+            else:
+                runtime_files[self.relative_runtime_file("codex_home", "config.toml")] = self._render_config(
+                    node,
+                    provider,
+                    sandbox,
+                )
+            host_auth = Path.home() / ".codex" / "auth.json"
+            if host_auth.is_file():
+                runtime_symlinks[self.relative_runtime_file("codex_home", "auth.json")] = str(host_auth)
             env["CODEX_HOME"] = codex_home
             env["HOME"] = codex_home
         cwd = paths.target_workdir
@@ -123,4 +172,5 @@ class CodexAdapter(AgentAdapter):
             cwd=cwd,
             trace_kind="codex",
             runtime_files=runtime_files,
+            runtime_symlinks=runtime_symlinks,
         )

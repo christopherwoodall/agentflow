@@ -5,165 +5,151 @@ default_branch: main
 workdir_subpath: codex-rs
 build_command: cargo build -p codex-cli
 test_command: cargo test -p codex-cli --lib && cargo test -p codex-models-manager --lib && cargo test -p codex-tools
-smoke_command: "{executable} --help >/dev/null"
+smoke_command: '{executable} --help >/dev/null'
 executable_path: target/debug/codex
 max_attempts: 3
 env:
   AGENTFLOW_CODEX_SANDBOX_MODE: danger-full-access
-evolution_prompt: |
-  Evolve Codex using the copied traces from the selected Codex nodes.
-
-  Primary objective:
-  - Improve Codex behavior based on the failures, friction, and missed opportunities visible in those traces.
-
-  Explicitly allowed modifications:
-  - System prompts, developer instructions, prompt templates, review prompts, collaboration-mode templates, and other instruction scaffolding.
-  - Tool registration, tool availability, tool routing, tool defaults, tool descriptions, tool metadata, and related schemas or configuration.
-  - Built-in agent roles, skills surfaced to the model, and agent orchestration behavior where it materially improves the traced workflows.
-  - Use the `tunable_surfaces` mapping below as the file-level source of truth for where each adjustable surface is implemented.
-
-  Constraints:
-  - Prefer the smallest coherent set of changes that clearly addresses the traced issues.
-  - Keep public interfaces and existing workflows stable unless the traces justify a behavior change.
-  - Add or update tests near the edited code when behavior changes.
+evolution_prompt: "Evolve Codex using the copied traces from the selected Codex nodes.\n\nPrimary objective:\n- Improve Codex behavior based on the failures, friction, and missed opportunities visible in those traces.\n\nHidden grading signal:\n- The user's workspace contains a graded verifier report at `.agentflow/teach/verifier_report.txt`\n  (and its structured JSON sibling `.agentflow/teach/verifier_report.json`). This report was produced\n  by a hidden test suite the agent never saw. The candidate solution it grades lives at\n  `.agentflow/teach/filter.py`. Read all three files before editing anything: the failing test cases\n  show you exactly which behaviors need to improve. Treat the failure list as ground-truth signal,\n  not as suggestions.\n\nPermission to specialize for documented failures (AGGRESSIVE MODE):\n- The verifier has already shown that abstract guidance (\"handle obfuscation paths\", \"consider\n  control characters\", etc.) is INSUFFICIENT \u2014 the actor model reads such hints but does not\n  operationalize them into the right code location. For this evolve, your specialization MUST be\n  concrete enough that the downstream actor can read the prompt and produce a passing fix on its\n  next attempt without further reasoning.\n- For EACH failing case named in the verifier report, your edit to the appropriate codex prompt\n  MUST contain ALL THREE of the following, in this order:\n    (a) The failing input quoted verbatim from the report (or a faithful escape thereof). Name\n        the case explicitly so the actor can search for it.\n    (b) A one-sentence diagnosis of WHERE in a typical implementation pipeline the bypass slips\n        through (e.g. \"null bytes inside a tag name defeat tag-level regex matches because the\n        regex engine treats `\\\\x00` as a non-word character that breaks `<script` boundary\").\n    (c) A concrete, copy-pasteable fix snippet with explicit pipeline placement. Example shape:\n            \"BEFORE running any tag-level regex, normalize the raw input with:\n                text = text.replace('\\\\x00', '')  # strip null bytes that split tag names\n            This must run on the RAW text once, before per-tag matching.\"\n        The snippet must show the actual code transformation AND its pipeline position.\n- Treat the verifier report as a curriculum: one failing case \u2192 one concrete prompt addition\n  that follows the (a)(b)(c) structure above. Generic editing-style improvements (e.g.\n  \"use apply_patch\", \"respect cwd boundaries\") are NOT a substitute for the per-case fix.\n- PRIMARY placement: write your per-case additions into `codex-rs/agentflow_wrapper.md`\n  (create the file if missing). Agentflow concatenates this file's content into the user\n  prompt at prepare-time, so it ALWAYS reaches the model regardless of gateway-side\n  system-prompt overrides. This is the only surface experimentally confirmed to steer\n  runtime behavior when the user routes codex through a third-party gateway.\n- Secondary placement: you may also mirror the addition into `codex-rs/models-manager/prompt.md`\n  (the baked-in `BASE_INSTRUCTIONS`). This helps in deployments without a gateway, but cannot\n  be relied on alone.\n- Do not put per-case knowledge into personality or collaboration-mode templates where it is\n  unlikely to fire.\n- This aggressive specialization permission overrides earlier \"keep prompts generic\" or\n  \"smallest coherent change\" instincts for the duration of this evolve, and applies ONLY to\n  failures explicitly listed in the verifier report.\n\nExplicitly allowed modifications:\n- System prompts, developer instructions, prompt templates, review prompts, collaboration-mode templates, and other instruction scaffolding.\n- Tool registration, tool availability, tool routing, tool defaults, tool descriptions, tool metadata, and related schemas or configuration.\n- Built-in agent roles, skills surfaced to the model, and agent orchestration behavior where it materially improves the traced workflows.\n- Use the `tunable_surfaces` mapping below as the file-level source of truth for where each adjustable surface is implemented.\n\nConstraints:\n- Prefer the smallest coherent set of changes that clearly addresses the traced issues.\n- Keep public interfaces and existing workflows stable unless the traces justify a behavior change.\n- Add or update tests near the edited code when behavior changes.\n"
 tunable_surfaces:
-  - name: Base model prompts and prompt assembly
-    notes: Primary coding-agent system prompts, prompt variants, and the main prompt assembly path.
-    paths:
-      - codex-rs/core/gpt_5_codex_prompt.md
-      - codex-rs/core/gpt-5.1-codex-max_prompt.md
-      - codex-rs/core/gpt-5.2-codex_prompt.md
-      - codex-rs/core/gpt_5_1_prompt.md
-      - codex-rs/core/gpt_5_2_prompt.md
-      - codex-rs/core/prompt_with_apply_patch_instructions.md
-      - codex-rs/core/src/codex.rs
-  - name: Model instruction templates and personalities
-    notes: Template fragments that shape instruction rendering and assistant tone.
-    paths:
-      - codex-rs/core/templates/model_instructions/gpt-5.2-codex_instructions_template.md
-      - codex-rs/core/templates/personalities/gpt-5.2-codex_friendly.md
-      - codex-rs/core/templates/personalities/gpt-5.2-codex_pragmatic.md
-  - name: Review prompts and review-thread messaging
-    notes: Review mode system prompt, request rendering, and final review history messages.
-    paths:
-      - codex-rs/core/review_prompt.md
-      - codex-rs/core/src/client_common.rs
-      - codex-rs/core/src/review_prompts.rs
-      - codex-rs/core/templates/review/exit_success.xml
-      - codex-rs/core/templates/review/exit_interrupted.xml
-      - codex-rs/core/templates/review/history_message_completed.md
-      - codex-rs/core/templates/review/history_message_interrupted.md
-  - name: Collaboration modes
-    notes: Default, execute, pair-programming, and plan-mode collaboration instructions.
-    paths:
-      - codex-rs/collaboration-mode-templates/templates/default.md
-      - codex-rs/collaboration-mode-templates/templates/execute.md
-      - codex-rs/collaboration-mode-templates/templates/pair_programming.md
-      - codex-rs/collaboration-mode-templates/templates/plan.md
-      - codex-rs/core/templates/collab/experimental_prompt.md
-  - name: Sub-agent roles and orchestration prompts
-    notes: Built-in sub-agent role definitions and orchestrator-facing role scaffolding.
-    paths:
-      - codex-rs/core/src/agent/role.rs
-      - codex-rs/core/src/agent/builtins/explorer.toml
-      - codex-rs/core/src/agent/builtins/awaiter.toml
-      - codex-rs/core/templates/agents/orchestrator.md
-  - name: Tool registry, defaults, and code-mode exposure
-    notes: Global tool registration, tool defaults, model-visible tool specs, and code-mode tool shaping.
-    paths:
-      - codex-rs/core/src/tools/spec.rs
-      - codex-rs/core/src/tools/registry.rs
-      - codex-rs/tools/src/tool_registry_plan.rs
-      - codex-rs/tools/src/tool_registry_plan_types.rs
-      - codex-rs/tools/src/tool_config.rs
-      - codex-rs/tools/src/tool_spec.rs
-      - codex-rs/tools/src/tool_definition.rs
-      - codex-rs/tools/src/code_mode.rs
-      - codex-rs/core/src/tools/code_mode/mod.rs
-      - codex-rs/core/src/tools/code_mode/execute_handler.rs
-      - codex-rs/core/src/tools/code_mode/wait_handler.rs
-  - name: Shell, exec, and permission request tools
-    notes: Shell tool schemas, exec-command behavior, permission prompting, and runtime handlers.
-    paths:
-      - codex-rs/tools/src/local_tool.rs
-      - codex-rs/core/src/unified_exec/process_manager.rs
-      - codex-rs/core/src/tools/handlers/shell.rs
-      - codex-rs/core/src/tools/handlers/request_permissions.rs
-      - codex-rs/core/src/tools/handlers/unified_exec.rs
-  - name: Apply-patch and editing tools
-    notes: Patch grammar, freeform/function apply-patch descriptions, and runtime execution.
-    paths:
-      - codex-rs/tools/src/apply_patch_tool.rs
-      - codex-rs/tools/src/tool_apply_patch.lark
-      - codex-rs/core/src/tools/handlers/apply_patch.rs
-      - codex-rs/core/src/tools/runtimes/apply_patch.rs
-  - name: Planning and request-user-input tools
-    notes: Plan tool wording, request-user-input descriptions, and runtime handlers.
-    paths:
-      - codex-rs/tools/src/plan_tool.rs
-      - codex-rs/tools/src/request_user_input_tool.rs
-      - codex-rs/core/src/tools/handlers/plan.rs
-      - codex-rs/core/src/tools/handlers/request_user_input.rs
-  - name: Multi-agent and batch-agent tools
-    notes: Spawn/wait/send/close tool descriptions and the runtime orchestration for sub-agents and batch jobs.
-    paths:
-      - codex-rs/tools/src/agent_tool.rs
-      - codex-rs/tools/src/agent_job_tool.rs
-      - codex-rs/core/src/tools/handlers/multi_agents.rs
-      - codex-rs/core/src/tools/handlers/multi_agents_v2.rs
-      - codex-rs/core/src/tools/handlers/agent_jobs.rs
-  - name: Tool search and tool suggestion UX
-    notes: Search-tool descriptions, suggestion metadata, and runtime handlers for discovering deferred tools/connectors.
-    paths:
-      - codex-rs/tools/src/tool_discovery.rs
-      - codex-rs/core/templates/search_tool/tool_description.md
-      - codex-rs/core/templates/search_tool/tool_suggest_description.md
-      - codex-rs/core/src/tools/handlers/tool_search.rs
-      - codex-rs/core/src/tools/handlers/tool_suggest.rs
-  - name: Image and utility tools
-    notes: View-image and utility tool descriptions plus their runtime handlers.
-    paths:
-      - codex-rs/tools/src/view_image.rs
-      - codex-rs/tools/src/utility_tool.rs
-      - codex-rs/core/src/tools/handlers/view_image.rs
-      - codex-rs/core/src/tools/handlers/list_dir.rs
-  - name: MCP tool descriptions, exposure, and approval messaging
-    notes: MCP tool annotation, namespace exposure, approval text, and model-visible MCP wrappers.
-    paths:
-      - codex-rs/codex-mcp/src/mcp_connection_manager.rs
-      - codex-rs/core/src/mcp_tool_exposure.rs
-      - codex-rs/core/src/mcp_tool_approval_templates.rs
-      - codex-rs/core/src/consequential_tool_message_templates.json
-      - codex-rs/tools/src/mcp_tool.rs
-      - codex-rs/tools/src/mcp_resource_tool.rs
-      - codex-rs/core/src/tools/handlers/mcp.rs
-      - codex-rs/core/src/tools/handlers/mcp_resource.rs
-  - name: Apps, project-doc, and user-instruction context injection
-    notes: App/connectors instructions, AGENTS.md/project-doc rendering, and user instruction ingestion.
-    paths:
-      - codex-rs/core/src/apps/render.rs
-      - codex-rs/core/src/project_doc.rs
-      - codex-rs/core/hierarchical_agents_message.md
-      - codex-rs/instructions/src/lib.rs
-      - codex-rs/instructions/src/fragment.rs
-      - codex-rs/instructions/src/user_instructions.rs
-  - name: Compaction and memories
-    notes: Auto-compaction prompts, memory prompts, and memory stage configuration.
-    paths:
-      - codex-rs/core/src/compact.rs
-      - codex-rs/core/templates/compact/prompt.md
-      - codex-rs/core/templates/compact/summary_prefix.md
-      - codex-rs/core/src/memories/mod.rs
-      - codex-rs/core/src/memories/prompts.rs
-      - codex-rs/core/templates/memories/consolidation.md
-      - codex-rs/core/templates/memories/read_path.md
-      - codex-rs/core/templates/memories/stage_one_input.md
-      - codex-rs/core/templates/memories/stage_one_system.md
-  - name: Realtime and guardian policy prompts
-    notes: Realtime backend prompting and guardian/approval policy prompt templates.
-    paths:
-      - codex-rs/core/src/realtime_prompt.rs
-      - codex-rs/core/templates/realtime/backend_prompt.md
-      - codex-rs/core/src/guardian/prompt.rs
-      - codex-rs/core/src/guardian/policy.md
-      - codex-rs/core/src/guardian/policy_template.md
+- name: "Agentflow-side prompt wrapper (PRIMARY SURFACE \u2014 ALWAYS REACHES MODEL)"
+  notes: "This file is read by agentflow at prepare-time and its content is\nprepended to the user prompt for every codex_tuned invocation\n(separator: a blank line, `---`, blank line). Because it joins the\nUSER message \u2014 not a separate system message \u2014 it survives gateway\nproxies that overwrite system_instructions. CREATE this file if it\ndoes not exist yet; agentflow will pick it up automatically.\n\nPlace high-leverage, behavior-shaping instructions here for the\ncurrent task family. Each new entry should follow the same\n(a) failing case + verbatim input, (b) diagnosis, (c) concrete\ncopy-pasteable code-level fix structure required by the\nPermission-to-specialize section above.\n"
+  paths:
+  - codex-rs/agentflow_wrapper.md
+- name: "Base coding-agent system prompt (SECONDARY \u2014 may be overridden by gateway)"
+  notes: '`BASE_INSTRUCTIONS` in models-manager. Loaded via `include_str!` in
+
+    `codex-rs/models-manager/src/model_info.rs:16`. Only fires at runtime
+
+    when the model provider''s gateway respects client-sent system messages
+
+    and the remote models manager does not return its own base_instructions.
+
+    Edits here are documented as a fallback channel.
+
+    '
+  paths:
+  - codex-rs/models-manager/prompt.md
+  - codex-rs/models-manager/src/model_info.rs
+  - codex-rs/models-manager/models.json
+- name: apply_patch tool description and grammar
+  notes: '`APPLY_PATCH_TOOL_INSTRUCTIONS` baked in via
+
+    `codex-rs/apply-patch/src/lib.rs:34`. This is the only tool-description
+
+    text the model sees for apply_patch, so edits here directly change how
+
+    the model thinks about file edits.
+
+    '
+  paths:
+  - codex-rs/apply-patch/apply_patch_tool_instructions.md
+  - codex-rs/apply-patch/src/lib.rs
+  - codex-rs/core/src/tools/handlers/apply_patch.rs
+  - codex-rs/core/src/tools/runtimes/apply_patch.rs
+- name: Collaboration-mode prompts (baked-in via include_str!)
+  notes: '`codex-rs/collaboration-mode-templates/src/lib.rs` uses include_str! on
+
+    these four files; they are the real source of the default / execute /
+
+    pair-programming / plan collaboration instructions.
+
+    '
+  paths:
+  - codex-rs/collaboration-mode-templates/templates/default.md
+  - codex-rs/collaboration-mode-templates/templates/execute.md
+  - codex-rs/collaboration-mode-templates/templates/pair_programming.md
+  - codex-rs/collaboration-mode-templates/templates/plan.md
+  - codex-rs/collaboration-mode-templates/src/lib.rs
+- name: Review-mode prompt
+  notes: '`core/review_prompt.md` is loaded via `include_str!` in
+
+    `core/src/client_common.rs:19`. Only fires during review mode but is a
+
+    real baked surface.
+
+    '
+  paths:
+  - codex-rs/core/review_prompt.md
+  - codex-rs/core/src/client_common.rs
+  - codex-rs/core/templates/review/exit_success.xml
+  - codex-rs/core/templates/review/exit_interrupted.xml
+- name: Hierarchical / multi-agent message
+  notes: '`core/hierarchical_agents_message.md` baked in via
+
+    `core/src/agents_md.rs:34`.
+
+    '
+  paths:
+  - codex-rs/core/hierarchical_agents_message.md
+  - codex-rs/core/src/agents_md.rs
+- name: Compaction and memories prompts (baked in)
+  notes: "Auto-compaction and memory stage prompts \u2014 these .md files DO get\ninclude_str! linked from `core/src/compact.rs` and the memory modules.\n"
+  paths:
+  - codex-rs/core/templates/compact/prompt.md
+  - codex-rs/core/templates/compact/summary_prefix.md
+  - codex-rs/core/templates/memories/consolidation.md
+  - codex-rs/core/templates/memories/read_path.md
+  - codex-rs/core/templates/memories/stage_one_input.md
+  - codex-rs/core/templates/memories/stage_one_system.md
+  - codex-rs/core/src/compact.rs
+  - codex-rs/core/src/memories/mod.rs
+  - codex-rs/core/src/memories/prompts.rs
+- name: "Tool registry, specs, defaults (Rust source \u2014 compiled in)"
+  notes: 'Rust modules that wire up tool specs, defaults, and code-mode exposure.
+
+    Edits to descriptions or defaults take effect at compile time.
+
+    '
+  paths:
+  - codex-rs/core/src/tools/spec.rs
+  - codex-rs/core/src/tools/registry.rs
+  - codex-rs/tools/src/tool_registry_plan.rs
+  - codex-rs/tools/src/tool_registry_plan_types.rs
+  - codex-rs/tools/src/tool_config.rs
+  - codex-rs/tools/src/tool_spec.rs
+  - codex-rs/tools/src/tool_definition.rs
+  - codex-rs/tools/src/code_mode.rs
+  - codex-rs/core/src/tools/code_mode/mod.rs
+- name: Shell / exec / permission-request runtime
+  notes: Shell tool schemas, exec-command behavior, permission prompting, runtime handlers.
+  paths:
+  - codex-rs/tools/src/local_tool.rs
+  - codex-rs/core/src/unified_exec/process_manager.rs
+  - codex-rs/core/src/tools/handlers/shell.rs
+  - codex-rs/core/src/tools/handlers/request_permissions.rs
+  - codex-rs/core/src/tools/handlers/unified_exec.rs
+- name: Planning / request-user-input tools
+  paths:
+  - codex-rs/tools/src/plan_tool.rs
+  - codex-rs/tools/src/request_user_input_tool.rs
+  - codex-rs/core/src/tools/handlers/plan.rs
+  - codex-rs/core/src/tools/handlers/request_user_input.rs
+- name: Multi-agent / batch-agent tools
+  paths:
+  - codex-rs/tools/src/agent_tool.rs
+  - codex-rs/tools/src/agent_job_tool.rs
+  - codex-rs/core/src/tools/handlers/multi_agents.rs
+  - codex-rs/core/src/tools/handlers/multi_agents_v2.rs
+  - codex-rs/core/src/tools/handlers/agent_jobs.rs
+- name: MCP integration
+  paths:
+  - codex-rs/codex-mcp/src/mcp_connection_manager.rs
+  - codex-rs/core/src/mcp_tool_exposure.rs
+  - codex-rs/core/src/mcp_tool_approval_templates.rs
+  - codex-rs/tools/src/mcp_tool.rs
+  - codex-rs/tools/src/mcp_resource_tool.rs
+  - codex-rs/core/src/tools/handlers/mcp.rs
+  - codex-rs/core/src/tools/handlers/mcp_resource.rs
+- name: Apps / AGENTS.md / user-instruction context injection
+  paths:
+  - codex-rs/core/src/apps/render.rs
+  - codex-rs/core/src/project_doc.rs
+  - codex-rs/instructions/src/lib.rs
+  - codex-rs/instructions/src/fragment.rs
+  - codex-rs/instructions/src/user_instructions.rs
+- name: Realtime / guardian policy
+  paths:
+  - codex-rs/core/templates/realtime/backend_prompt.md
+  - codex-rs/core/src/realtime_prompt.rs
+  - codex-rs/core/src/guardian/prompt.rs

@@ -65,3 +65,11 @@ class Runner(ABC):
             target = base_dir / relative_path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
+
+    def materialize_runtime_symlinks(self, base_dir: Path, runtime_symlinks: dict[str, str]) -> None:
+        for relative_path, source in runtime_symlinks.items():
+            target = base_dir / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_symlink() or target.exists():
+                target.unlink()
+            target.symlink_to(source)

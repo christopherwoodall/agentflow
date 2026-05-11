@@ -340,6 +340,12 @@ def _materialize_runtime_files(prepared: PreparedExecution, runtime_dir: Path) -
         target = runtime_dir / relative_path
         ensure_dir(target.parent)
         target.write_text(content, encoding="utf-8")
+    for relative_path, source in prepared.runtime_symlinks.items():
+        target = runtime_dir / relative_path
+        ensure_dir(target.parent)
+        if target.is_symlink() or target.exists():
+            target.unlink()
+        target.symlink_to(source)
 
 
 def _run_prepared(prepared: PreparedExecution) -> subprocess.CompletedProcess[str]:

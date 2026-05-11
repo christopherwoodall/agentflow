@@ -268,6 +268,7 @@ class LocalRunner(Runner):
         should_cancel,
     ) -> RawExecutionResult:
         self.materialize_runtime_files(paths.host_runtime_dir, prepared.runtime_files)
+        self.materialize_runtime_symlinks(paths.host_runtime_dir, prepared.runtime_symlinks)
         ensure_dir(Path(prepared.cwd))
         launch_env = self._augment_local_env(prepared, paths)
         command, target_env = self._command_for_target(node, prepared)

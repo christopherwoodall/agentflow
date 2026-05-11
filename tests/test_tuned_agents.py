@@ -509,8 +509,15 @@ def test_repo_includes_codex_tuner_profile():
     assert "System prompts" in resolved.config.evolution_prompt
     assert "tool descriptions" in resolved.config.evolution_prompt
     assert len(resolved.config.tunable_surfaces) >= 10
-    assert resolved.config.tunable_surfaces[0].name == "Base model prompts and prompt assembly"
-    assert "codex-rs/core/gpt_5_codex_prompt.md" in resolved.config.tunable_surfaces[0].paths
+    # The first surface must be the real BASE_INSTRUCTIONS prompt that gets
+    # baked into the binary via `include_str!` in models-manager — not the
+    # legacy `core/gpt_5_codex_prompt.md` documentation files which never made
+    # it into the compiled binary.
+    # The primary surface is now the agentflow-side wrapper file, because
+    # gateway-proxied model providers can override server-side prompts and the
+    # wrapper is concatenated into the user message by agentflow before invoke.
+    assert resolved.config.tunable_surfaces[0].name.startswith("Agentflow-side prompt wrapper")
+    assert "codex-rs/agentflow_wrapper.md" in resolved.config.tunable_surfaces[0].paths
 
 
 def test_cli_lists_tuned_agents(tmp_path, capsys):
